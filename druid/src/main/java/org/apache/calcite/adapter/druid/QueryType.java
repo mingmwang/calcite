@@ -21,11 +21,12 @@ public enum QueryType {
   SELECT("select"),
   TOP_N("topN"),
   GROUP_BY("groupBy"),
-  TIMESERIES("timeseries");
+  TIMESERIES("timeseries"),
+  SCAN("scan");
 
   private final String queryName;
 
-  private QueryType(String queryName) {
+  QueryType(String queryName) {
     this.queryName = queryName;
   }
 

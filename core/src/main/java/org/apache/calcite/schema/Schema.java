@@ -121,36 +121,14 @@ public interface Schema {
    */
   boolean isMutable();
 
-  /** Returns whether the contents of this schema have changed since a given
-   * time. The time is a millisecond value, as returned by
-   * {@link System#currentTimeMillis()}. If this method returns true, and
-   * caching is enabled, Calcite will re-build caches.
-   *
-   * <p>The default implementation in
-   * {@link org.apache.calcite.schema.impl.AbstractSchema} always returns
-   * {@code false}.</p>
-   *
-   * <p>To control whether Calcite caches the contents of a schema, use the
-   * "cache" JSON attribute. The default value is "true".</p>
-   *
-   * @param lastCheck The last time that Calcite called this method, or
-   *   {@link Long#MIN_VALUE} if this is the first call
-   * @param now The current time in millis, as returned by
-   *   {@link System#currentTimeMillis()}
-   *
-   * @return Whether contents changed after {@code lastCheckMillis}.
-   */
-  boolean contentsHaveChangedSince(long lastCheck, long now);
-
   /** Returns the snapshot of this schema as of the specified time. The
    * contents of the schema snapshot should not change over time.
    *
-   * @param now The current time in millis, as returned by
-   *   {@link System#currentTimeMillis()}
+   * @param version The current schema version
    *
    * @return the schema snapshot.
    */
-  Schema snapshot(long now);
+  Schema snapshot(SchemaVersion version);
 
   /** Table type. */
   enum TableType {
@@ -332,7 +310,15 @@ public interface Schema {
      *
      * <p>If you get one of these, please fix the problem by adding an enum
      * value. */
-    OTHER,
+    OTHER;
+
+    /** The name used in JDBC. For example "SYSTEM TABLE" rather than
+     * "SYSTEM_TABLE". */
+    public final String jdbcName;
+
+    TableType() {
+      this.jdbcName = name().replace('_', ' ');
+    }
   }
 }
 

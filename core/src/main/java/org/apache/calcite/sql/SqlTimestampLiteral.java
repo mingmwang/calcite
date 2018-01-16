@@ -39,7 +39,7 @@ public class SqlTimestampLiteral extends SqlAbstractDateTimeLiteral {
 
   //~ Methods ----------------------------------------------------------------
 
-  public SqlNode clone(SqlParserPos pos) {
+  @Override public SqlTimestampLiteral clone(SqlParserPos pos) {
     return new SqlTimestampLiteral((TimestampString) value, precision,
         hasTimeZone, pos);
   }
@@ -63,14 +63,7 @@ public class SqlTimestampLiteral extends SqlAbstractDateTimeLiteral {
       SqlWriter writer,
       int leftPrec,
       int rightPrec) {
-    switch (writer.getDialect().getDatabaseProduct()) {
-    case MSSQL:
-      writer.literal("'" + this.toFormattedString() + "'");
-      break;
-    default:
-      writer.literal(this.toString());
-      break;
-    }
+    writer.getDialect().unparseDateTimeLiteral(writer, this, leftPrec, rightPrec);
   }
 }
 

@@ -18,6 +18,7 @@ package org.apache.calcite.adapter.file;
 
 import org.apache.calcite.util.Source;
 import org.apache.calcite.util.Sources;
+import org.apache.calcite.util.TestUtil;
 
 import org.jsoup.select.Elements;
 
@@ -34,12 +35,17 @@ import static org.junit.Assert.fail;
 
 import java.io.File;
 import java.net.MalformedURLException;
+import java.net.URL;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.Iterator;
+import java.util.Properties;
 
 /**
  * Unit tests for FileReader.
  */
-
 public class FileReaderTest {
 
   private static final Source CITIES_SOURCE =
@@ -57,6 +63,12 @@ public class FileReaderTest {
     } else {
       return s;
     }
+  }
+
+  private static String resourcePath(String path) throws Exception {
+    final URL url = FileReaderTest.class.getResource("/" + path);
+    final File file = new File(url.toURI());
+    return file.getAbsolutePath();
   }
 
   /** Tests {@link FileReader} URL instantiation - no path. */
@@ -173,7 +185,6 @@ public class FileReaderTest {
 
   /** Tests {@link FileReader} iterator with static file, */
   @Test public void testFileReaderIterator() throws FileReaderException {
-    System.out.println(new File("").getAbsolutePath());
     final Source source =
         Sources.file(null, file("target/test-classes/tableOK.html"));
     FileReader t = new FileReader(source);
@@ -185,6 +196,45 @@ public class FileReaderTest {
     assertTrue(row.get(1).text().equals("R2C1"));
   }
 
+  /** Tests reading a CSV file via the file adapter. Based on the test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-1952">[CALCITE-1952]
+   * NPE in planner</a>. */
+  @Test public void testCsvFile() throws Exception {
+    Properties info = new Properties();
+    final String path = resourcePath("sales-csv");
+    final String model = "inline:"
+        + "{\n"
+        + "  \"version\": \"1.0\",\n"
+        + "  \"defaultSchema\": \"XXX\",\n"
+        + "  \"schemas\": [\n"
+        + "    {\n"
+        + "      \"name\": \"FILES\",\n"
+        + "      \"type\": \"custom\",\n"
+        + "      \"factory\": \"org.apache.calcite.adapter.file.FileSchemaFactory\",\n"
+        + "      \"operand\": {\n"
+        + "        \"directory\": " + TestUtil.escapeString(path) + "\n"
+        + "      }\n"
+        + "    }\n"
+        + "  ]\n"
+        + "}";
+    info.put("model", model);
+    info.put("lex", "JAVA");
+
+    try (Connection connection =
+             DriverManager.getConnection("jdbc:calcite:", info);
+         Statement stmt = connection.createStatement()) {
+      final String sql = "select * from FILES.DEPTS";
+      final ResultSet rs = stmt.executeQuery(sql);
+      assertThat(rs.next(), is(true));
+      assertThat(rs.getString(1), is("10"));
+      assertThat(rs.next(), is(true));
+      assertThat(rs.getString(1), is("20"));
+      assertThat(rs.next(), is(true));
+      assertThat(rs.getString(1), is("30"));
+      assertThat(rs.next(), is(false));
+      rs.close();
+    }
+  }
 }
 
 // End FileReaderTest.java

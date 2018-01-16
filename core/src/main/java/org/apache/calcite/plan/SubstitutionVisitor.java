@@ -179,7 +179,9 @@ public class SubstitutionVisitor {
     this.cluster = target_.getCluster();
     final RexExecutor executor =
         Util.first(cluster.getPlanner().getExecutor(), RexUtil.EXECUTOR);
-    this.simplify = new RexSimplify(cluster.getRexBuilder(), false, executor);
+    final RelOptPredicateList predicates = RelOptPredicateList.EMPTY;
+    this.simplify =
+        new RexSimplify(cluster.getRexBuilder(), predicates, false, executor);
     this.rules = rules;
     this.query = Holder.of(MutableRels.toMutable(query_));
     this.target = MutableRels.toMutable(target_);
@@ -1204,8 +1206,7 @@ public class SubstitutionVisitor {
         Mappings.apply2(mapping, aggregate.groupSets);
     List<AggregateCall> aggregateCalls =
         apply(mapping, aggregate.aggCalls);
-    return MutableAggregate.of(input, aggregate.indicator, groupSet, groupSets,
-        aggregateCalls);
+    return MutableAggregate.of(input, groupSet, groupSets, aggregateCalls);
   }
 
   private static List<AggregateCall> apply(final Mapping mapping,
@@ -1263,11 +1264,11 @@ public class SubstitutionVisitor {
         }
         aggregateCalls.add(
             AggregateCall.create(getRollup(aggregateCall.getAggregation()),
-                aggregateCall.isDistinct(),
+                aggregateCall.isDistinct(), aggregateCall.isApproximate(),
                 ImmutableList.of(target.groupSet.cardinality() + i), -1,
                 aggregateCall.type, aggregateCall.name));
       }
-      result = MutableAggregate.of(target, false, groupSet.build(), null,
+      result = MutableAggregate.of(target, groupSet.build(), null,
           aggregateCalls);
     }
     return MutableRels.createCastRel(result, query.rowType, true);
@@ -1544,12 +1545,18 @@ public class SubstitutionVisitor {
         };
 
     public static final FilterOnProjectRule INSTANCE =
-        new FilterOnProjectRule();
+        new FilterOnProjectRule(RelFactories.LOGICAL_BUILDER);
 
-    private FilterOnProjectRule() {
+    /**
+     * Creates a FilterOnProjectRule.
+     *
+     * @param relBuilderFactory Builder for relational expressions
+     */
+    public FilterOnProjectRule(RelBuilderFactory relBuilderFactory) {
       super(
           operand(LogicalFilter.class, null, PREDICATE,
-              some(operand(LogicalProject.class, any()))));
+              some(operand(LogicalProject.class, any()))),
+          relBuilderFactory, null);
     }
 
     public void onMatch(RelOptRuleCall call) {

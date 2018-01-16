@@ -56,7 +56,7 @@ public class AggregateUnionTransposeRule extends RelOptRule {
           LogicalUnion.class, RelFactories.LOGICAL_BUILDER);
 
   private static final Map<Class<? extends SqlAggFunction>, Boolean>
-  SUPPORTED_AGGREGATES = new IdentityHashMap<>();
+      SUPPORTED_AGGREGATES = new IdentityHashMap<>();
 
   static {
     SUPPORTED_AGGREGATES.put(SqlMinMaxAggFunction.class, true);
@@ -125,7 +125,7 @@ public class AggregateUnionTransposeRule extends RelOptRule {
       relBuilder.push(input);
       if (!alreadyUnique) {
         ++transformCount;
-        relBuilder.aggregate(relBuilder.groupKey(aggRel.getGroupSet(), false, null),
+        relBuilder.aggregate(relBuilder.groupKey(aggRel.getGroupSet(), null),
             aggRel.getAggCallList());
       }
     }
@@ -140,7 +140,7 @@ public class AggregateUnionTransposeRule extends RelOptRule {
     // create a new union whose children are the aggregates created above
     relBuilder.union(true, union.getInputs().size());
     relBuilder.aggregate(
-        relBuilder.groupKey(aggRel.getGroupSet(), aggRel.indicator, aggRel.getGroupSets()),
+        relBuilder.groupKey(aggRel.getGroupSet(), aggRel.getGroupSets()),
         transformedAggCalls);
     call.transformTo(relBuilder.build());
   }
@@ -170,6 +170,7 @@ public class AggregateUnionTransposeRule extends RelOptRule {
       }
       AggregateCall newCall =
           AggregateCall.create(aggFun, origCall.isDistinct(),
+              origCall.isApproximate(),
               ImmutableList.of(groupCount + ord.i), -1, groupCount, input,
               aggType, origCall.getName());
       newCalls.add(newCall);

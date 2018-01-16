@@ -23,6 +23,7 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.core.CorrelationId;
 import org.apache.calcite.rel.core.JoinRelType;
+import org.apache.calcite.rel.logical.LogicalAggregate;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexCall;
@@ -41,14 +42,12 @@ import org.apache.calcite.rex.RexSubQuery;
 import org.apache.calcite.rex.RexWindow;
 import org.apache.calcite.rex.RexWindowBound;
 import org.apache.calcite.sql.JoinType;
+import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.SqlBasicCall;
 import org.apache.calcite.sql.SqlBinaryOperator;
 import org.apache.calcite.sql.SqlCall;
-import org.apache.calcite.sql.SqlDataTypeSpec;
 import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlDynamicParam;
-import org.apache.calcite.sql.SqlFunction;
-import org.apache.calcite.sql.SqlFunctionCategory;
 import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlJoin;
 import org.apache.calcite.sql.SqlKind;
@@ -65,13 +64,8 @@ import org.apache.calcite.sql.fun.SqlCase;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.fun.SqlSumEmptyIsZeroAggFunction;
 import org.apache.calcite.sql.parser.SqlParserPos;
-import org.apache.calcite.sql.type.BasicSqlType;
-import org.apache.calcite.sql.type.InferTypes;
-import org.apache.calcite.sql.type.OperandTypes;
-import org.apache.calcite.sql.type.ReturnTypes;
 import org.apache.calcite.sql.type.SqlTypeFamily;
 import org.apache.calcite.sql.type.SqlTypeName;
-import org.apache.calcite.sql.type.SqlTypeUtil;
 import org.apache.calcite.sql.validate.SqlValidatorUtil;
 import org.apache.calcite.util.DateString;
 import org.apache.calcite.util.TimeString;
@@ -84,14 +78,12 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.math.BigDecimal;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -104,16 +96,8 @@ import java.util.Set;
  * State for generating a SQL statement.
  */
 public abstract class SqlImplementor {
-  private static final Logger LOGGER =
-      LoggerFactory.getLogger(SqlImplementor.class);
 
   public static final SqlParserPos POS = SqlParserPos.ZERO;
-
-  /** MySQL specific function. */
-  public static final SqlFunction ISNULL_FUNCTION =
-      new SqlFunction("ISNULL", SqlKind.OTHER_FUNCTION,
-          ReturnTypes.BOOLEAN, InferTypes.FIRST_KNOWN,
-          OperandTypes.ANY, SqlFunctionCategory.SYSTEM);
 
   public final SqlDialect dialect;
   protected final Set<String> aliasSet = new LinkedHashSet<>();
@@ -126,82 +110,6 @@ public abstract class SqlImplementor {
   }
 
   public abstract Result visitChild(int i, RelNode e);
-
-  /** Rewrite SINGLE_VALUE into expression based on database variants
-   *  E.g. HSQLDB, MYSQL, ORACLE, etc
-   */
-  public static SqlNode rewriteSingleValueExpr(SqlNode aggCall,
-      SqlDialect sqlDialect) {
-    final SqlNode operand = ((SqlBasicCall) aggCall).operand(0);
-    final SqlNode caseOperand;
-    final SqlNode elseExpr;
-    final SqlNode countCall =
-        SqlStdOperatorTable.COUNT.createCall(POS, operand);
-
-    final SqlLiteral nullLiteral = SqlLiteral.createNull(POS);
-    final SqlNode wrappedOperand;
-    switch (sqlDialect.getDatabaseProduct()) {
-    case MYSQL:
-    case HSQLDB:
-      // For MySQL, generate
-      //   CASE COUNT(*)
-      //   WHEN 0 THEN NULL
-      //   WHEN 1 THEN <result>
-      //   ELSE (SELECT NULL UNION ALL SELECT NULL)
-      //   END
-      //
-      // For hsqldb, generate
-      //   CASE COUNT(*)
-      //   WHEN 0 THEN NULL
-      //   WHEN 1 THEN MIN(<result>)
-      //   ELSE (VALUES 1 UNION ALL VALUES 1)
-      //   END
-      caseOperand = countCall;
-
-      final SqlNodeList selectList = new SqlNodeList(POS);
-      selectList.add(nullLiteral);
-      final SqlNode unionOperand;
-      switch (sqlDialect.getDatabaseProduct()) {
-      case MYSQL:
-        wrappedOperand = operand;
-        unionOperand = new SqlSelect(POS, SqlNodeList.EMPTY, selectList,
-            null, null, null, null, SqlNodeList.EMPTY, null, null, null);
-        break;
-      default:
-        wrappedOperand = SqlStdOperatorTable.MIN.createCall(POS, operand);
-        unionOperand = SqlStdOperatorTable.VALUES.createCall(POS,
-            SqlLiteral.createApproxNumeric("0", POS));
-      }
-
-      SqlCall unionAll = SqlStdOperatorTable.UNION_ALL
-          .createCall(POS, unionOperand, unionOperand);
-
-      final SqlNodeList selectList2 = new SqlNodeList(POS);
-      selectList2.add(nullLiteral);
-      elseExpr = SqlStdOperatorTable.SCALAR_QUERY.createCall(POS, unionAll);
-      break;
-
-    default:
-      LOGGER.debug("SINGLE_VALUE rewrite not supported for {}",
-          sqlDialect.getDatabaseProduct());
-      return aggCall;
-    }
-
-    final SqlNodeList whenList = new SqlNodeList(POS);
-    whenList.add(SqlLiteral.createExactNumeric("0", POS));
-    whenList.add(SqlLiteral.createExactNumeric("1", POS));
-
-    final SqlNodeList thenList = new SqlNodeList(POS);
-    thenList.add(nullLiteral);
-    thenList.add(wrappedOperand);
-
-    SqlNode caseExpr =
-        new SqlCase(POS, caseOperand, whenList, thenList, elseExpr);
-
-    LOGGER.debug("SINGLE_VALUE rewritten into [{}]", caseExpr);
-
-    return caseExpr;
-  }
 
   public void addSelect(List<SqlNode> selectList, SqlNode node,
       RelDataType rowType) {
@@ -564,6 +472,12 @@ public abstract class SqlImplementor {
         case BOOLEAN:
           return SqlLiteral.createBoolean(literal.getValueAs(Boolean.class),
               POS);
+        case INTERVAL_YEAR_MONTH:
+        case INTERVAL_DAY_TIME:
+          final boolean negative = literal.getValueAs(Boolean.class);
+          return SqlLiteral.createInterval(negative ? -1 : 1,
+              literal.getValueAs(String.class),
+              literal.getType().getIntervalQualifier(), POS);
         case DATE:
           return SqlLiteral.createDate(literal.getValueAs(DateString.class),
               POS);
@@ -659,7 +573,11 @@ public abstract class SqlImplementor {
         }
 
         final RexCall call = (RexCall) stripCastFromString(rex);
-        final SqlOperator op = call.getOperator();
+        SqlOperator op = call.getOperator();
+        switch (op.getKind()) {
+        case SUM0:
+          op = SqlStdOperatorTable.SUM;
+        }
         final List<SqlNode> nodeList = toSql(program, call.getOperands());
         switch (call.getKind()) {
         case CAST:
@@ -667,7 +585,7 @@ public abstract class SqlImplementor {
             assert nodeList.size() == 1;
             return nodeList.get(0);
           } else {
-            nodeList.add(toSql(call.getType()));
+            nodeList.add(dialect.getCastSpec(call.getType()));
           }
         }
         if (op instanceof SqlBinaryOperator && nodeList.size() > 2) {
@@ -773,35 +691,6 @@ public abstract class SqlImplementor {
       final SqlNode last = nodeList.get(nodeList.size() - 1);
       final SqlNode call = createLeftCall(op, butLast);
       return op.createCall(new SqlNodeList(ImmutableList.of(call, last), POS));
-    }
-
-    private SqlNode toSql(RelDataType type) {
-      switch (dialect.getDatabaseProduct()) {
-      case MYSQL:
-        switch (type.getSqlTypeName()) {
-        case VARCHAR:
-          // MySQL doesn't have a VARCHAR type, only CHAR.
-          return new SqlDataTypeSpec(new SqlIdentifier("CHAR", POS),
-              type.getPrecision(), -1, null, null, POS);
-        case INTEGER:
-          return new SqlDataTypeSpec(new SqlIdentifier("_UNSIGNED", POS),
-              type.getPrecision(), -1, null, null, POS);
-        }
-        break;
-      }
-      if (type instanceof BasicSqlType) {
-        return new SqlDataTypeSpec(
-            new SqlIdentifier(type.getSqlTypeName().name(), POS),
-            type.getPrecision(),
-            type.getScale(),
-            type.getCharset() != null
-            && dialect.supportsCharSet()
-                ? type.getCharset().name()
-                : null,
-            null,
-            POS);
-      }
-      return SqlTypeUtil.convertTypeToSpec(type);
     }
 
     private List<SqlNode> toSql(RexProgram program, List<RexNode> operandList) {
@@ -1013,6 +902,12 @@ public abstract class SqlImplementor {
           needNew = true;
         }
       }
+      if (rel instanceof LogicalAggregate
+          && !dialect.supportsNestedAggregations()
+          && hasNestedAggregations((LogicalAggregate) rel)) {
+        needNew = true;
+      }
+
       SqlSelect select;
       Expressions.FluentList<Clause> clauseList = Expressions.list();
       if (needNew) {
@@ -1054,6 +949,29 @@ public abstract class SqlImplementor {
       }
       return new Builder(rel, clauseList, select, newContext,
           needNew ? null : aliases);
+    }
+
+    private boolean hasNestedAggregations(LogicalAggregate rel) {
+      List<AggregateCall> aggCallList = rel.getAggCallList();
+      HashSet<Integer> aggregatesArgs = new HashSet<>();
+      for (AggregateCall aggregateCall: aggCallList) {
+        aggregatesArgs.addAll(aggregateCall.getArgList());
+      }
+      for (Integer aggregatesArg : aggregatesArgs) {
+        SqlNode selectNode = ((SqlSelect) node).getSelectList().get(aggregatesArg);
+        if (!(selectNode instanceof SqlBasicCall)) {
+          continue;
+        }
+        for (SqlNode operand : ((SqlBasicCall) selectNode).getOperands()) {
+          if (operand instanceof SqlCall) {
+            final SqlOperator operator = ((SqlCall) operand).getOperator();
+            if (operator instanceof SqlAggFunction) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
     }
 
     // make private?
@@ -1153,7 +1071,7 @@ public abstract class SqlImplementor {
   public class Builder {
     private final RelNode rel;
     final List<Clause> clauses;
-    private final SqlSelect select;
+    final SqlSelect select;
     public final Context context;
     private final Map<String, RelDataType> aliases;
 
@@ -1202,14 +1120,17 @@ public abstract class SqlImplementor {
 
     public void addOrderItem(List<SqlNode> orderByList,
         RelFieldCollation field) {
-      if (field.nullDirection != RelFieldCollation.NullDirection.UNSPECIFIED
-          && dialect.getDatabaseProduct() == SqlDialect.DatabaseProduct.MYSQL) {
-        orderByList.add(
-            ISNULL_FUNCTION.createCall(POS,
-                context.field(field.getFieldIndex())));
-        field = new RelFieldCollation(field.getFieldIndex(),
-            field.getDirection(),
-            RelFieldCollation.NullDirection.UNSPECIFIED);
+      if (field.nullDirection != RelFieldCollation.NullDirection.UNSPECIFIED) {
+        boolean first = field.nullDirection == RelFieldCollation.NullDirection.FIRST;
+        SqlNode nullDirectionNode =
+            dialect.emulateNullDirection(context.field(field.getFieldIndex()),
+                first, field.direction.isDescending());
+        if (nullDirectionNode != null) {
+          orderByList.add(nullDirectionNode);
+          field = new RelFieldCollation(field.getFieldIndex(),
+              field.getDirection(),
+              RelFieldCollation.NullDirection.UNSPECIFIED);
+        }
       }
       orderByList.add(context.toSql(field));
     }

@@ -251,6 +251,9 @@ in those same conformance levels, any *column* in *insert* may be replaced by
 In *orderItem*, if *expression* is a positive integer *n*, it denotes
 the <em>n</em>th item in the SELECT clause.
 
+In *query*, *count* and *start* may each be either an unsigned integer literal
+or a dynamic parameter whose value is an integer.
+
 An aggregate query is a query that contains a GROUP BY or a HAVING
 clause, or aggregate functions in the SELECT clause. In the SELECT,
 HAVING and ORDER BY clauses of an aggregate query, all expressions
@@ -507,6 +510,7 @@ FRAC_SECOND,
 G,
 GENERAL,
 GENERATED,
+GEOMETRY,
 **GET**,
 **GLOBAL**,
 GO,
@@ -959,8 +963,8 @@ name will have been converted to upper case also.
 
 ### Scalar types
 
-| Data type   | Description               | Range and examples   |
-|:----------- |:------------------------- |:---------------------|
+| Data type   | Description               | Range and example literals
+|:----------- |:------------------------- |:--------------------------
 | BOOLEAN     | Logical values            | Values: TRUE, FALSE, UNKNOWN
 | TINYINT     | 1 byte signed integer     | Range is -128 to 127
 | SMALLINT    | 2 byte signed integer     | Range is -32768 to 32767
@@ -977,8 +981,10 @@ name will have been converted to upper case also.
 | DATE        | Date                      | Example: DATE '1969-07-20'
 | TIME        | Time of day               | Example: TIME '20:17:40'
 | TIMESTAMP [ WITHOUT TIME ZONE ] | Date and time | Example: TIMESTAMP '1969-07-20 20:17:40'
+| TIMESTAMP WITH LOCAL TIME ZONE | Date and time with local time zone | Example: TIMESTAMP '1969-07-20 20:17:40 America/Los Angeles'
 | TIMESTAMP WITH TIME ZONE | Date and time with time zone | Example: TIMESTAMP '1969-07-20 20:17:40 America/Los Angeles'
-| INTERVAL timeUnit [ TO timeUnit ] | Date time interval | Examples: INTERVAL '1:5' YEAR TO MONTH, INTERVAL '45' DAY
+| INTERVAL timeUnit [ TO timeUnit ] | Date time interval | Examples: INTERVAL '1-5' YEAR TO MONTH, INTERVAL '45' DAY, INTERVAL '1 2:34:56.789' DAY TO SECOND
+| GEOMETRY | Geometry | Examples: ST_GeomFromText('POINT (30 10)')
 
 Where:
 
@@ -989,9 +995,13 @@ timeUnit:
 
 Note:
 
-* DATE, TIME and TIMESTAMP have no time zone. There is not even an implicit
-  time zone, such as UTC (as in Java) or the local time zone. It is left to
-  the user or application to supply a time zone.
+* DATE, TIME and TIMESTAMP have no time zone. For those types, there is not
+  even an implicit time zone, such as UTC (as in Java) or the local time zone.
+  It is left to the user or application to supply a time zone. In turn,
+  TIMESTAMP WITH LOCAL TIME ZONE does not store the time zone internally, but
+  it will rely on the supplied time zone to provide correct semantics.
+* GEOMETRY is allowed only in certain
+  [conformance levels]({{ site.apiRoot }}/org/apache/calcite/sql/validate/SqlConformance.html#allowGeometry--).
 
 ### Non-scalar types
 
@@ -1003,6 +1013,32 @@ Note:
 | MULTISET | Unordered collection that may contain duplicates
 | ARRAY    | Ordered, contiguous collection that may contain duplicates
 | CURSOR   | Cursor over the result of executing a query
+
+### Spatial types
+
+Spatial data is represented as character strings encoded as
+[well-known text (WKT)](https://en.wikipedia.org/wiki/Well-known_text)
+or binary strings encoded as
+[well-known binary (WKB)](https://en.wikipedia.org/wiki/Well-known_binary).
+
+Where you would use a literal, apply the `ST_GeomFromText` function,
+for example `ST_GeomFromText('POINT (30 10)')`.
+
+| Data type   | Type code | Examples in WKT
+|:----------- |:--------- |:---------------------
+| GEOMETRY           |  0 | generalization of Point, Curve, Surface, GEOMETRYCOLLECTION
+| POINT              |  1 | <tt>ST_GeomFromText(&#8203;'POINT (30 10)')</tt> is a point in 2D space; <tt>ST_GeomFromText(&#8203;'POINT Z(30 10 2)')</tt> is point in 3D space
+| CURVE            | 13 | generalization of LINESTRING
+| LINESTRING         |  2 | <tt>ST_GeomFromText(&#8203;'LINESTRING (30 10, 10 30, 40 40)')</tt>
+| SURFACE            | 14 | generalization of Polygon, PolyhedralSurface
+| POLYGON            |  3 | <tt>ST_GeomFromText(&#8203;'POLYGON ((30 10, 40 40, 20 40, 10 20, 30 10))')</tt> is a pentagon; <tt>ST_GeomFromText(&#8203;'POLYGON ((35 10, 45 45, 15 40, 10 20, 35 10), (20 30, 35 35, 30 20, 20 30))')</tt> is a pentagon with a quadrilateral hole
+| POLYHEDRALSURFACE  | 15 |
+| GEOMETRYCOLLECTION |  7 | a collection of zero or more GEOMETRY instances; a generalization of MULTIPOINT, MULTILINESTRING, MULTIPOLYGON
+| MULTIPOINT         |  4 | <tt>ST_GeomFromText(&#8203;'MULTIPOINT ((10 40), (40 30), (20 20), (30 10))')</tt> is equivalent to <tt>ST_GeomFromText(&#8203;'MULTIPOINT (10 40, 40 30, 20 20, 30 10)')</tt>
+| MULTICURVE         |  - | generalization of MULTILINESTRING
+| MULTILINESTRING    |  5 | <tt>ST_GeomFromText(&#8203;'MULTILINESTRING ((10 10, 20 20, 10 40), (40 40, 30 30, 40 20, 30 10))')</tt>
+| MULTISURFACE       |  - | generalization of MULTIPOLYGON
+| MULTIPOLYGON       |  6 | <tt>ST_GeomFromText(`&#8203;'MULTIPOLYGON (((30 20, 45 40, 10 40, 30 20)), ((15 5, 40 10, 10 20, 5 10, 15 5)))')</tt>
 
 ## Operators and functions
 
@@ -1447,6 +1483,7 @@ passed to the aggregate function.
 | COLLECT( [ ALL &#124; DISTINCT ] value)       | Returns a multiset of the values
 | COUNT( [ ALL &#124; DISTINCT ] value [, value ]*) | Returns the number of input rows for which *value* is not null (wholly not null if *value* is composite)
 | COUNT(*)                           | Returns the number of input rows
+| APPROX_COUNT_DISTINCT(value [, value ]*)      | Returns the approximate number of distinct values of *value*; the database is allowed to use an approximation but is not required to
 | AVG( [ ALL &#124; DISTINCT ] numeric)         | Returns the average (arithmetic mean) of *numeric* across all input values
 | SUM( [ ALL &#124; DISTINCT ] numeric)         | Returns the sum of *numeric* across all input values
 | MAX( [ ALL &#124; DISTINCT ] value)           | Returns the maximum value of *value* across all input values
@@ -1474,7 +1511,7 @@ Not implemented:
 
 | Operator syntax                           | Description
 |:----------------------------------------- |:-----------
-| COUNT(value [, value ]*) OVER window     | Returns the number of rows in *window* for which *value* is not null (wholly not null if *value* is composite)
+| COUNT(value [, value ]*) OVER window      | Returns the number of rows in *window* for which *value* is not null (wholly not null if *value* is composite)
 | COUNT(*) OVER window                      | Returns the number of rows in *window*
 | AVG(numeric) OVER window                  | Returns the average (arithmetic mean) of *numeric* across all values in *window*
 | SUM(numeric) OVER window                  | Returns the sum of *numeric* across all values in *window*
@@ -1491,7 +1528,8 @@ Not implemented:
 
 Not implemented:
 
-* COUNT(DISTINCT value) OVER window
+* COUNT(DISTINCT value [, value ]*) OVER window
+* APPROX_COUNT_DISTINCT(value [, value ]*) OVER window
 * FIRST_VALUE(value) IGNORE NULLS OVER window
 * LAST_VALUE(value) IGNORE NULLS OVER window
 * PERCENT_RANK(value) OVER window
@@ -1536,7 +1574,317 @@ by a grouped window function.
 | TUMBLE_END(expression, interval [, time ]) | Returns the value of *expression* at the end of the window defined by a `TUMBLE` function call
 | TUMBLE_START(expression, interval [, time ]) | Returns the value of *expression* at the beginning of the window defined by a `TUMBLE` function call
 
-### User-defined functions
+### Spatial functions
+
+In the following:
+
+* *geom* is a GEOMETRY;
+* *geomCollection* is a GEOMETRYCOLLECTION;
+* *point* is a POINT;
+* *lineString* is a LINESTRING;
+* *iMatrix* is a [DE-9IM intersection matrix](https://en.wikipedia.org/wiki/DE-9IM);
+* *distance*, *tolerance*, *segmentLengthFraction*, *offsetDistance* are of type double;
+* *dimension*, *quadSegs*, *srid*, *zoom* are of type integer;
+* *layerType* is a character string;
+* *gml* is a character string containing [Geography Markup Language (GML)](https://en.wikipedia.org/wiki/Geography_Markup_Language);
+* *wkt* is a character string containing [well-known text (WKT)](https://en.wikipedia.org/wiki/Well-known_text);
+* *wkb* is a binary string containing [well-known binary (WKB)](https://en.wikipedia.org/wiki/Well-known_binary).
+
+In the "C" (for "compatibility") column, "o" indicates that the function
+implements the OpenGIS Simple Features Implementation Specification for SQL,
+[version 1.2.1](http://www.opengeospatial.org/standards/sfs);
+"p" indicates that the function is a
+[PostGIS](http://www.postgis.net/docs/reference.html) extension to OpenGIS.
+
+#### Geometry conversion functions (2D)
+
+| C | Operator syntax      | Description
+|:- |:-------------------- |:-----------
+| p | ST_AsText(geom) | Alias for `ST_AsWKT`
+| o | ST_AsWKT(geom) | Converts *geom* → WKT
+| o | ST_GeomFromText(wkt [, srid ]) | Returns a specified GEOMETRY value from WKT representation
+| o | ST_LineFromText(wkt [, srid ]) | Converts WKT → LINESTRING
+| o | ST_MLineFromText(wkt [, srid ]) | Converts WKT → MULTILINESTRING
+| o | ST_MPointFromText(wkt [, srid ]) | Converts WKT → MULTIPOINT
+| o | ST_MPolyFromText(wkt [, srid ]) Converts WKT → MULTIPOLYGON
+| o | ST_PointFromText(wkt [, srid ]) | Converts WKT → POINT
+| o | ST_PolyFromText(wkt [, srid ]) | Converts WKT → POLYGON
+
+Not implemented:
+
+* ST_AsBinary(geom) GEOMETRY → WKB
+* ST_AsGML(geom) GEOMETRY → GML
+* ST_Force2D(geom) 3D GEOMETRY → 2D GEOMETRY
+* ST_GeomFromGML(gml [, srid ]) GML → GEOMETRY
+* ST_GeomFromWKB(wkb [, srid ]) WKB → GEOMETRY
+* ST_GoogleMapLink(geom [, layerType [, zoom ]]) GEOMETRY → Google map link
+* ST_LineFromWKB(wkb [, srid ]) WKB → LINESTRING
+* ST_OSMMapLink(geom [, marker ]) GEOMETRY → OSM map link
+* ST_PointFromWKB(wkb [, srid ]) WKB → POINT
+* ST_PolyFromWKB(wkb [, srid ]) WKB → POLYGON
+* ST_ToMultiLine(geom) Converts the coordinates of *geom* (which may be a GEOMETRYCOLLECTION) into a MULTILINESTRING
+* ST_ToMultiPoint(geom)) Converts the coordinates of *geom* (which may be a GEOMETRYCOLLECTION) into a MULTIPOINT
+* ST_ToMultiSegments(geom) Converts *geom* (which may be a GEOMETRYCOLLECTION) into a set of distinct segments stored in a MULTILINESTRING
+
+#### Geometry conversion functions (3D)
+
+Not implemented:
+
+* ST_Force3D(geom) 2D GEOMETRY → 3D GEOMETRY
+
+#### Geometry creation functions (2D)
+
+| C | Operator syntax      | Description
+|:- |:-------------------- |:-----------
+| o | ST_MakeLine(point1 [, point ]*) | Creates a line-string from the given POINTs (or MULTIPOINTs)
+| p | ST_MakePoint(x, y [, z ]) | Alias for `ST_Point`
+| o | ST_Point(x, y [, z ]) | Constructs a point from two or three coordinates
+
+Not implemented:
+
+* ST_BoundingCircle(geom) Returns the minimum bounding circle of *geom*
+* ST_Expand(geom, distance) Expands *geom*'s envelope
+* ST_Expand(geom, deltaX, deltaY) Expands *geom*'s envelope
+* ST_MakeEllipse(point, width, height) Constructs an ellipse
+* ST_MakeEnvelope(xMin, yMin, xMax, yMax  [, srid ]) Creates a rectangular POLYGON
+* ST_MakeGrid(geom, deltaX, deltaY) Calculates a regular grid of POLYGONs based on *geom*
+* ST_MakeGridPoints(geom, deltaX, deltaY) Calculates a regular grid of points based on *geom*
+* ST_MakePolygon(lineString [, hole ]*) Creates a POLYGON from *lineString* with the given holes (which are required to be closed LINESTRINGs)
+* ST_MinimumDiameter(geom) Returns the minimum diameter of *geom*
+* ST_MinimumRectangle(geom) Returns the minimum rectangle enclosing *geom*
+* ST_OctogonalEnvelope(geom) Returns the octogonal envelope of *geom*
+* ST_RingBuffer(geom, distance, bufferCount [, endCapStyle [, doDifference]]) Returns a MULTIPOLYGON of buffers centered at *geom* and of increasing buffer size
+
+### Geometry creation functions (3D)
+
+Not implemented:
+
+* ST_Extrude(geom, height [, flag]) Extrudes a GEOMETRY
+* ST_GeometryShadow(geom, point, height) Computes the shadow footprint of *geom*
+* ST_GeometryShadow(geom, azimuth, altitude, height [, unify ]) Computes the shadow footprint of *geom*
+
+#### Geometry properties (2D)
+
+| C | Operator syntax      | Description
+|:- |:-------------------- |:-----------
+| o | ST_Boundary(geom [, srid ]) | Returns the boundary of *geom*
+| o | ST_Distance(geom1, geom2) | Returns the distance between *geom1* and *geom2*
+| o | ST_GeometryType(geom) | Returns the type of *geom*
+| o | ST_GeometryTypeCode(geom) | Returns the OGC SFS type code of *geom*
+| o | ST_Envelope(geom [, srid ]) | Returns the envelope of *geom* (which may be a GEOMETRYCOLLECTION) as a GEOMETRY
+| o | ST_X(geom) | Returns the x-value of the first coordinate of *geom*
+| o | ST_Y(geom) | Returns the y-value of the first coordinate of *geom*
+
+Not implemented:
+
+* ST_Centroid(geom) Returns the centroid of *geom* (which may be a GEOMETRYCOLLECTION)
+* ST_CompactnessRatio(polygon) Returns the square root of *polygon*'s area divided by the area of the circle with circumference equal to its perimeter
+* ST_CoordDim(geom) Returns the dimension of the coordinates of *geom*
+* ST_Dimension(geom) Returns the dimension of *geom*
+* ST_EndPoint(lineString) Returns the last coordinate of *lineString*
+* ST_Envelope(geom [, srid ]) Returns the envelope of *geom* (which may be a GEOMETRYCOLLECTION) as a GEOMETRY
+* ST_Explode(query [, fieldName]) Explodes the GEOMETRYCOLLECTIONs in the *fieldName* column of a query into multiple geometries
+* ST_Extent(geom) Returns the minimum bounding box of *geom* (which may be a GEOMETRYCOLLECTION)
+* ST_ExteriorRing(polygon) Returns the exterior ring of *polygon* as a linear-ring
+* ST_GeometryN(geomCollection, n) Returns the *n*th GEOMETRY of *geomCollection*
+* ST_InteriorRingN(polygon, n) Returns the *n*th interior ring of *polygon*
+* ST_IsClosed(geom) Returns whether *geom* is a closed LINESTRING or MULTILINESTRING
+* ST_IsEmpty(geom) Returns whether *geom* is empty
+* ST_IsRectangle(geom) Returns whether *geom* is a rectangle
+* ST_IsRing(geom) Returns whether *geom* is a closed and simple line-string or MULTILINESTRING
+* ST_IsSimple(geom) Returns whether *geom* is simple
+* ST_IsValid(geom) Returns whether *geom* is valid
+* ST_IsValidDetail(geom [, selfTouchValid ]) Returns a valid detail as an array of objects
+* ST_IsValidReason(geom [, selfTouchValid ]) Returns text stating whether *geom* is valid, and if not valid, a reason why
+* ST_NPoints(geom) Returns the number of points in *geom*
+* ST_NumGeometries(geom) Returns the number of geometries in *geom* (1 if it is not a GEOMETRYCOLLECTION)
+* ST_NumInteriorRing(geom) Alias for `ST_NumInteriorRings`
+* ST_NumInteriorRings(geom) Returns the number of interior rings of *geom*
+* ST_NumPoints(lineString) Returns the number of points in *lineString*
+* ST_PointN(geom, n) Returns the *n*th point of a *lineString*
+* ST_PointOnSurface(geom) Returns an interior or boundary point of *geom*
+* ST_SRID(geom) Returns SRID value of *geom* or 0 if it does not have one
+* ST_StartPoint(lineString) Returns the first coordinate of *lineString*
+* ST_XMax(geom) Returns the maximum x-value of *geom*
+* ST_XMin(geom) Returns the minimum x-value of *geom*
+* ST_YMax(geom) Returns the maximum y-value of *geom*
+* ST_YMin(geom) Returns the minimum y-value of *geom*
+
+#### Geometry properties (3D)
+
+| C | Operator syntax      | Description
+|:- |:-------------------- |:-----------
+| p | ST_Is3D(s) | Returns whether *geom* has at least one z-coordinate
+| o | ST_Z(geom) | Returns the z-value of the first coordinate of *geom*
+
+Not implemented:
+
+* ST_ZMax(geom) Returns the maximum z-value of *geom*
+* ST_ZMin(geom) Returns the minimum z-value of *geom*
+
+### Geometry predicates
+
+| C | Operator syntax      | Description
+|:- |:-------------------- |:-----------
+| o | ST_Contains(geom1, geom2) | Returns whether *geom1* contains *geom2*
+| p | ST_ContainsProperly(geom1, geom2) | Returns whether *geom1* contains *geom2* but does not intersect its boundary
+| o | ST_Crosses(geom1, geom2) | Returns whether *geom1* crosses *geom2*
+| o | ST_Disjoint(geom1, geom2) | Returns whether *geom1* and *geom2* are disjoint
+| p | ST_DWithin(geom1, geom2, distance) | Returns whether *geom1* and *geom* are within *distance* of one another
+| o | ST_EnvelopesIntersect(geom1, geom2) | Returns whether the envelope of *geom1* intersects the envelope of *geom2*
+| o | ST_Equals(geom1, geom2) | Returns whether *geom1* equals *geom2*
+| o | ST_Intersects(geom1, geom2) | Returns whether *geom1* intersects *geom2*
+| o | ST_Overlaps(geom1, geom2) | Returns whether *geom1* overlaps *geom2*
+| o | ST_Touches(geom1, geom2) | Returns whether *geom1* touches *geom2*
+| o | ST_Within(geom1, geom2) | Returns whether *geom1* is within *geom2*
+
+Not implemented:
+
+* ST_Covers(geom1, geom2) Returns whether no point in *geom2* is outside *geom1*
+* ST_OrderingEquals(geom1, geom2) Returns whether *geom1* equals *geom2* and their coordinates and component Geometries are listed in the same order
+* ST_Relate(geom1, geom2) Returns the DE-9IM intersection matrix of *geom1* and *geom2*
+* ST_Relate(geom1, geom2, iMatrix) Returns whether *geom1* and *geom2* are related by the given intersection matrix *iMatrix*
+
+#### Geometry operators (2D)
+
+The following functions combine 2D geometries.
+
+| C | Operator syntax      | Description
+|:- |:-------------------- |:-----------
+| o | ST_Buffer(geom, distance [, quadSegs \| style ]) | Computes a buffer around *geom*
+| o | ST_Union(geom1, geom2) | Computes the union of *geom1* and *geom2*
+| o | ST_Union(geomCollection) | Computes the union of the geometries in *geomCollection*
+
+See also: the `ST_Union` aggregate function.
+
+Not implemented:
+
+* ST_ConvexHull(geom) Computes the smallest convex polygon that contains all the points in *geom*
+* ST_Difference(geom1, geom2) Computes the difference between two geometries
+* ST_Intersection(geom1, geom2) Computes the intersection of two geometries
+* ST_SymDifference(geom1, geom2) Computes the symmetric difference between two geometries
+
+#### Affine transformation functions (3D and 2D)
+
+Not implemented:
+
+* ST_Rotate(geom, angle [, origin \| x, y]) Rotates a *geom* counter-clockwise by *angle* (in radians) about *origin* (or the point (*x*, *y*))
+* ST_Scale(geom, xFactor, yFactor [, zFactor ]) Scales *geom* by multiplying the ordinates by the indicated scale factors
+* ST_Translate(geom, x, y, [, z]) Translates *geom*
+
+#### Geometry editing functions (2D)
+
+The following functions modify 2D geometries.
+
+Not implemented:
+
+* ST_AddPoint(geom, point [, tolerance ]) Adds *point* to *geom* with a given *tolerance* (default 0)
+* ST_CollectionExtract(geom, dimension) Filters *geom*, returning a multi-geometry of those members with a given *dimension* (1 = point, 2 = line-string, 3 = polygon)
+* ST_Densify(geom, tolerance) Inserts extra vertices every *tolerance* along the line segments of *geom*
+* ST_FlipCoordinates(geom) Flips the X and Y coordinates of *geom*
+* ST_Holes(geom) Returns the holes in *geom* (which may be a GEOMETRYCOLLECTION)
+* ST_Normalize(geom) Converts *geom* to normal form
+* ST_RemoveDuplicatedCoordinates(geom) Removes duplicated coordinates from *geom*
+* ST_RemoveHoles(geom) Removes a *geom*'s holes
+* ST_RemovePoints(geom, poly) Removes all coordinates of *geom* located within *poly*; null if all coordinates are removed
+* ST_RemoveRepeatedPoints(geom, tolerance) Removes from *geom* all repeated points (or points within *tolerance* of another point)
+* ST_Reverse(geom) Reverses the vertex order of *geom*
+
+#### Geometry editing functions (3D)
+
+The following functions modify 3D geometries.
+
+Not implemented:
+
+* ST_AddZ(geom, zToAdd) Adds *zToAdd* to the z-coordinate of *geom*
+* ST_Interpolate3DLine(geom) Returns *geom* with a interpolation of z values, or null if it is not a line-string or MULTILINESTRING
+* ST_MultiplyZ(geom, zFactor) Returns *geom* with its z-values multiplied by *zFactor*
+* ST_Reverse3DLine(geom [, sortOrder ]) Potentially reverses *geom* according to the z-values of its first and last coordinates
+* ST_UpdateZ(geom, newZ [, updateCondition ]) Updates the z-values of *geom*
+* ST_ZUpdateLineExtremities(geom, startZ, endZ [, interpolate ]) Updates the start and end z-values of *geom*
+
+#### Geometry measurement functions (2D)
+
+Not implemented:
+
+* ST_Area(geom) Returns the area of *geom* (which may be a GEOMETRYCOLLECTION)
+* ST_ClosestCoordinate(geom, point) Returns the coordinate(s) of *geom* closest to *point*
+* ST_ClosestPoint(geom1, geom2) Returns the point of *geom1* closest to *geom2*
+* ST_FurthestCoordinate(geom, point) Returns the coordinate(s) of *geom* that are furthest from *point*
+* ST_Length(lineString) Returns the length of *lineString*
+* ST_LocateAlong(geom, segmentLengthFraction, offsetDistance) Returns a MULTIPOINT containing points along the line segments of *geom* at *segmentLengthFraction* and *offsetDistance*
+* ST_LongestLine(geom1, geom2) Returns the 2-dimensional longest line-string between the points of *geom1* and *geom2*
+* ST_MaxDistance(geom1, geom2) Computes the maximum distance between *geom1* and *geom2*
+* ST_Perimeter(polygon) Returns the length of the perimeter of *polygon* (which may be a MULTIPOLYGON)
+* ST_ProjectPoint(point, lineString) Projects *point* onto a *lineString* (which may be a MULTILINESTRING)
+
+#### Geometry measurement functions (3D)
+
+Not implemented:
+
+* ST_3DArea(geom) Return a polygon's 3D area
+* ST_3DLength(geom) Returns the 3D length of a line-string
+* ST_3DPerimeter(geom) Returns the 3D perimeter of a polygon or MULTIPOLYGON
+* ST_SunPosition(point [, timestamp ]) Computes the sun position at *point* and *timestamp* (now by default)
+
+#### Geometry processing functions (2D)
+
+The following functions process geometries.
+
+Not implemented:
+
+* ST_LineIntersector(geom1, geom2) Splits *geom1* (a line-string) with *geom2*
+* ST_LineMerge(geom) Merges a collection of linear components to form a line-string of maximal length
+* ST_MakeValid(geom [, preserveGeomDim [, preserveDuplicateCoord [, preserveCoordDim]]]) Makes *geom* valid
+* ST_Polygonize(geom) Creates a MULTIPOLYGON from edges of *geom*
+* ST_PrecisionReducer(geom, n) Reduces *geom*'s precision to *n* decimal places
+* ST_RingSideBuffer(geom, distance, bufferCount [, endCapStyle [, doDifference]]) Computes a ring buffer on one side
+* ST_SideBuffer(geom, distance [, bufferStyle ]) Compute a single buffer on one side
+* ST_Simplify(geom, distance) Simplifies *geom* using the [Douglas-Peuker algorithm](https://en.wikipedia.org/wiki/Ramer%E2%80%93Douglas%E2%80%93Peucker_algorithm) with a *distance* tolerance
+* ST_SimplifyPreserveTopology(geom) Simplifies *geom*, preserving its topology
+* ST_Snap(geom1, geom2, tolerance) Snaps *geom1* and *geom2* together
+* ST_Split(geom1, geom2 [, tolerance]) Splits *geom1* by *geom2* using *tolerance* (default 1E-6) to determine where the point splits the line
+
+#### Geometry projection functions
+
+| C | Operator syntax      | Description
+|:- |:-------------------- |:-----------
+| o | ST_SetSRID(geom, srid) | Returns a copy of *geom* with a new SRID
+| o | ST_Transform(geom, srid) | Transforms *geom* from one coordinate reference system (CRS) to the CRS specified by *srid*
+
+#### Trigonometry functions
+
+Not implemented:
+
+* ST_Azimuth(point1, point2) Return the azimuth of the segment from *point1* to *point2*
+
+#### Topography functions
+
+Not implemented:
+
+* ST_TriangleAspect(geom) Returns the aspect of a triangle
+* ST_TriangleContouring(query \[, z1, z2, z3 ]\[, varArgs]*) Splits triangles into smaller triangles according to classes
+* ST_TriangleDirection(geom) Computes the direction of steepest ascent of a triangle and returns it as a line-string
+* ST_TriangleSlope(geom) Computes the slope of a triangle as a percentage
+* ST_Voronoi(geom [, outDimension [, envelopePolygon ]]) Creates a Voronoi diagram
+
+#### Triangulation functions
+
+Not implemented:
+
+* ST_ConstrainedDelaunay(geom [, flag [, quality ]]) Computes a constrained Delaunay triangulation based on *geom*
+* ST_Delaunay(geom [, flag [, quality ]]) Computes a Delaunay triangulation based on points
+* ST_Tessellate(polygon) Tessellates *polygon* (may be MULTIPOLYGON) with adaptive triangles
+
+#### Geometry aggregate functions
+
+Not implemented:
+
+* ST_Accum(geom) Accumulates *geom* into a GEOMETRYCOLLECTION (or MULTIPOINT, MULTILINESTRING or MULTIPOLYGON if possible)
+* ST_Collect(geom) Alias for `ST_Accum`
+* ST_Union(geom) Computes the union of geometries
+
+## User-defined functions
 
 Calcite is extensible. You can define each kind of function using user code.
 For each kind of function there are often several ways to define a function,
@@ -1678,6 +2026,7 @@ matchRecognize:
             | SKIP TO variable )
       ]
       PATTERN '(' pattern ')'
+      [ WITHIN intervalLiteral ]
       [ SUBSET subsetItem [, subsetItem ]* ]
       DEFINE variable AS condition [, variable AS condition ]*
       ')'
@@ -1689,7 +2038,7 @@ measureColumn:
       expression AS alias
 
 pattern:
-      patternTerm ['|' patternTerm ]*
+      patternTerm [ '|' patternTerm ]*
 
 patternTerm:
       patternFactor [ patternFactor ]*
@@ -1714,7 +2063,105 @@ patternQuantifier:
   |   '??'
   |   '{' { [ minRepeat ], [ maxRepeat ] } '}' ['?']
   |   '{' repeat '}'
+
+intervalLiteral:
+      INTERVAL 'string' timeUnit [ TO timeUnit ]
 {% endhighlight %}
 
 In *patternQuantifier*, *repeat* is a positive integer,
 and *minRepeat* and *maxRepeat* are non-negative integers.
+
+### DDL Extensions
+
+DDL extensions are only available in the calcite-server module.
+To enable, include `calcite-server.jar` in your class path, and add
+`parserFactory=org.apache.calcite.sql.parser.ddl.SqlDdlParserImpl#FACTORY`
+to the JDBC connect string (see connect string property
+[parserFactory]({{ site.apiRoot }}/org/apache/calcite/config/CalciteConnectionProperty.html#PARSER_FACTORY)).
+
+{% highlight sql %}
+ddlStatement:
+      createSchemaStatement
+  |   createForeignSchemaStatement
+  |   createTableStatement
+  |   createViewStatement
+  |   createMaterializedViewStatement
+  |   dropSchemaStatement
+  |   dropForeignSchemaStatement
+  |   dropTableStatement
+  |   dropViewStatement
+  |   dropMaterializedViewStatement
+
+createSchemaStatement:
+      CREATE [ OR REPLACE ] SCHEMA [ IF NOT EXISTS ] name
+
+createForeignSchemaStatement:
+      CREATE [ OR REPLACE ] FOREIGN SCHEMA [ IF NOT EXISTS ] name
+      (
+          TYPE 'type'
+      |   LIBRARY 'com.example.calcite.ExampleSchemaFactory'
+      )
+      [ OPTIONS '(' option [, option ]* ')' ]
+
+option:
+      name literal
+
+createTableStatement:
+      CREATE TABLE [ IF NOT EXISTS ] name
+      [ '(' tableElement [, tableElement ]* ')' ]
+      [ AS query ]
+
+tableElement:
+      columnName type [ columnGenerator ] [ columnConstraint ]
+  |   columnName
+  |   tableConstraint
+
+columnGenerator:
+      DEFAULT expression
+  |   [ GENERATED ALWAYS ] AS '(' expression ')'
+      { VIRTUAL | STORED }
+
+columnConstraint:
+      [ CONSTRAINT name ]
+      [ NOT ] NULL
+
+tableConstraint:
+      [ CONSTRAINT name ]
+      {
+          CHECK '(' expression ')'
+      |   PRIMARY KEY '(' columnName [, columnName ]* ')'
+      |   UNIQUE '(' columnName [, columnName ]* ')'
+      }
+
+createViewStatement:
+      CREATE [ OR REPLACE ] VIEW name
+      [ '(' columnName [, columnName ]* ')' ]
+      AS query
+
+createMaterializedViewStatement:
+      CREATE MATERIALIZED VIEW [ IF NOT EXISTS ] name
+      [ '(' columnName [, columnName ]* ')' ]
+      AS query
+
+dropSchemaStatement:
+      DROP SCHEMA name [ IF EXISTS ]
+
+dropForeignSchemaStatement:
+      DROP FOREIGN SCHEMA name [ IF EXISTS ]
+
+dropTableStatement:
+      DROP TABLE name [ IF EXISTS ]
+
+dropViewStatement:
+      DROP VIEW name [ IF EXISTS ]
+
+dropMaterializedViewStatement:
+      DROP MATERIALIZED VIEW name [ IF EXISTS ]
+{% endhighlight %}
+
+In *createTableStatement*, if you specify *AS query*, you may omit the list of
+*tableElement*s, or you can omit the data type of any *tableElement*, in which
+case it just renames the underlying column.
+
+In *columnGenerator*, if you do not specify `VIRTUAL` or `STORED` for a
+generated column, `VIRTUAL` is the default.

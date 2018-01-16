@@ -138,14 +138,13 @@ public class RelWriterTest {
                 final RelDataType bigIntType =
                     cluster.getTypeFactory().createSqlType(SqlTypeName.BIGINT);
                 LogicalAggregate aggregate =
-                    LogicalAggregate.create(filter, false,
-                        ImmutableBitSet.of(0), null,
+                    LogicalAggregate.create(filter, ImmutableBitSet.of(0), null,
                         ImmutableList.of(
                             AggregateCall.create(SqlStdOperatorTable.COUNT,
-                                true, ImmutableList.of(1), -1, bigIntType,
-                                "c"),
+                                true, false, ImmutableList.of(1), -1,
+                                bigIntType, "c"),
                             AggregateCall.create(SqlStdOperatorTable.COUNT,
-                                false, ImmutableList.<Integer>of(), -1,
+                                false, false, ImmutableList.<Integer>of(), -1,
                                 bigIntType, "d")));
                 aggregate.explain(writer);
                 return writer.asString();

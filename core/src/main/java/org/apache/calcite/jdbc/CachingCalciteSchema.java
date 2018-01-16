@@ -18,6 +18,7 @@ package org.apache.calcite.jdbc;
 
 import org.apache.calcite.schema.Function;
 import org.apache.calcite.schema.Schema;
+import org.apache.calcite.schema.SchemaVersion;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.TableMacro;
 import org.apache.calcite.util.NameMap;
@@ -214,15 +215,33 @@ class CachingCalciteSchema extends CalciteSchema {
     return null;
   }
 
-  protected CalciteSchema snapshot(CalciteSchema parent, long now) {
+  protected CalciteSchema snapshot(CalciteSchema parent, SchemaVersion version) {
     CalciteSchema snapshot = new CachingCalciteSchema(parent,
-        schema.snapshot(now), name, null, tableMap, latticeMap,
+        schema.snapshot(version), name, null, tableMap, latticeMap,
         functionMap, functionNames, nullaryFunctionMap, getPath());
     for (CalciteSchema subSchema : subSchemaMap.map().values()) {
-      CalciteSchema subSchemaSnapshot = subSchema.snapshot(snapshot, now);
+      CalciteSchema subSchemaSnapshot = subSchema.snapshot(snapshot, version);
       snapshot.subSchemaMap.put(subSchema.name, subSchemaSnapshot);
     }
     return snapshot;
+  }
+
+  @Override public boolean removeTable(String name) {
+    if (cache) {
+      final long now = System.nanoTime();
+      implicitTableCache.enable(now, false);
+      implicitTableCache.enable(now, true);
+    }
+    return super.removeTable(name);
+  }
+
+  @Override public boolean removeFunction(String name) {
+    if (cache) {
+      final long now = System.nanoTime();
+      implicitFunctionCache.enable(now, false);
+      implicitFunctionCache.enable(now, true);
+    }
+    return super.removeFunction(name);
   }
 
   /** Strategy for caching the value of an object and re-creating it if its
@@ -242,20 +261,21 @@ class CachingCalciteSchema extends CalciteSchema {
   }
 
   /** Implementation of {@link CachingCalciteSchema.Cached}
-   * that drives from {@link CachingCalciteSchema#cache}. */
+   * that drives from {@link CachingCalciteSchema#cache}.
+   *
+   * @param <T> element type */
   private abstract class AbstractCached<T> implements Cached<T> {
     T t;
-    long checked = Long.MIN_VALUE;
+    boolean built = false;
 
     public T get(long now) {
       if (!CachingCalciteSchema.this.cache) {
         return build();
       }
-      if (checked == Long.MIN_VALUE
-          || schema.contentsHaveChangedSince(checked, now)) {
+      if (!built) {
         t = build();
       }
-      checked = now;
+      built = true;
       return t;
     }
 
@@ -263,7 +283,7 @@ class CachingCalciteSchema extends CalciteSchema {
       if (!enabled) {
         t = null;
       }
-      checked = Long.MIN_VALUE;
+      built = false;
     }
   }
 

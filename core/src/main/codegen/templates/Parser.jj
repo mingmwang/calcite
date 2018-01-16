@@ -609,14 +609,14 @@ SqlNode OrderedQueryOrExpr(ExprContext exprContext) :
         <LIMIT>
         (
             // MySQL-style syntax. "LIMIT start, count"
-            start = UnsignedNumericLiteral()
-            <COMMA> count = UnsignedNumericLiteral() {
+            start = UnsignedNumericLiteralOrParam()
+            <COMMA> count = UnsignedNumericLiteralOrParam() {
                 if (!this.conformance.isLimitStartCountAllowed()) {
                     throw new ParseException(RESOURCE.limitStartCountNotAllowed().str());
                 }
             }
         |
-            count = UnsignedNumericLiteral()
+            count = UnsignedNumericLiteralOrParam()
         |
             <ALL>
         )
@@ -625,12 +625,13 @@ SqlNode OrderedQueryOrExpr(ExprContext exprContext) :
         // ROW or ROWS is required in SQL:2008 but we make it optional
         // because it is not present in Postgres-style syntax.
         // If you specify both LIMIT start and OFFSET, OFFSET wins.
-        <OFFSET> start = UnsignedNumericLiteral() [ <ROW> | <ROWS> ]
+        <OFFSET> start = UnsignedNumericLiteralOrParam() [ <ROW> | <ROWS> ]
     ]
     [
         // SQL:2008-style syntax. "OFFSET ... FETCH ...".
         // If you specify both LIMIT and FETCH, FETCH wins.
-        <FETCH> ( <FIRST> | <NEXT> ) count = UnsignedNumericLiteral() ( <ROW> | <ROWS> ) <ONLY>
+        <FETCH> ( <FIRST> | <NEXT> ) count = UnsignedNumericLiteralOrParam()
+        ( <ROW> | <ROWS> ) <ONLY>
     ]
     {
         if (orderBy != null || start != null || count != null) {
@@ -704,7 +705,7 @@ SqlNode ParenthesizedExpression(ExprContext exprContext) :
  * <p>which should be illegal.  The above is interpreted as equivalent to
  *
  * <blockquote><pre>
- * <code>WHERE x IN ((select count(*) from t where c=d),5)</pre>
+ * WHERE x IN ((select count(*) from t where c=d),5)</pre>
  * </blockquote>
  *
  * <p>which is a legal use of a sub-query.  The only way to fix the hole is to
@@ -749,6 +750,61 @@ SqlNodeList ParenthesizedQueryOrCommaList(
             checkNonQueryExpression(exprContext);
         }
         e = Expression(exprContext)
+        {
+            list.add(e);
+        }
+    )*
+    <RPAREN>
+    {
+        return new SqlNodeList(list, s.end(this));
+    }
+}
+
+/** As ParenthesizedQueryOrCommaList, but allows DEFAULT
+ * in place of any of the expressions. For example,
+ * {@code (x, DEFAULT, null, DEFAULT)}. */
+SqlNodeList ParenthesizedQueryOrCommaListWithDefault(
+    ExprContext exprContext) :
+{
+    SqlNode e;
+    List<SqlNode> list;
+    ExprContext firstExprContext = exprContext;
+    final Span s;
+}
+{
+    <LPAREN>
+    {
+        // we've now seen left paren, so a query by itself should
+        // be interpreted as a sub-query
+        s = span();
+        switch (exprContext) {
+        case ACCEPT_SUB_QUERY:
+            firstExprContext = ExprContext.ACCEPT_NONCURSOR;
+            break;
+        case ACCEPT_CURSOR:
+            firstExprContext = ExprContext.ACCEPT_ALL;
+            break;
+        }
+    }
+    (
+        e = OrderedQueryOrExpr(firstExprContext)
+    |
+        e = Default()
+    )
+    {
+        list = startList(e);
+    }
+    (
+        <COMMA>
+        {
+            // a comma-list can't appear where only a query is expected
+            checkNonQueryExpression(exprContext);
+        }
+        (
+            e = Expression(exprContext)
+        |
+            e = Default()
+        )
         {
             list.add(e);
         }
@@ -823,9 +879,7 @@ void Arg0(List list, ExprContext exprContext) :
         name = SimpleIdentifier() <NAMED_ARGUMENT_ASSIGNMENT>
     ]
     (
-        <DEFAULT_> {
-            e = SqlStdOperatorTable.DEFAULT.createCall(getPos());
-        }
+        e = Default()
     |
         e = OrderedQueryOrExpr(firstExprContext)
     )
@@ -850,9 +904,7 @@ void Arg(List list, ExprContext exprContext) :
         name = SimpleIdentifier() <NAMED_ARGUMENT_ASSIGNMENT>
     ]
     (
-        <DEFAULT_> {
-            e = SqlStdOperatorTable.DEFAULT.createCall(getPos());
-        }
+        e = Default()
     |
         e = Expression(exprContext)
     )
@@ -864,6 +916,13 @@ void Arg(List list, ExprContext exprContext) :
             }
             list.add(e);
         }
+    }
+}
+
+SqlNode Default() : {}
+{
+    <DEFAULT_> {
+        return SqlStdOperatorTable.DEFAULT.createCall(getPos());
     }
 }
 
@@ -890,12 +949,21 @@ SqlNode SqlStmt() :
 }
 {
     (
+<#-- Add methods to parse additional statements here -->
+<#list parser.statementParserMethods as method>
+        stmt = ${method}
+    |
+</#list>
         stmt = SqlSetOption(Span.of(), null)
     |
         stmt = SqlAlter()
     |
 <#if parser.createStatementParserMethods?size != 0>
         stmt = SqlCreate()
+    |
+</#if>
+<#if parser.dropStatementParserMethods?size != 0>
+        stmt = SqlDrop()
     |
 </#if>
         stmt = OrderedQueryOrExpr(ExprContext.ACCEPT_QUERY)
@@ -913,12 +981,6 @@ SqlNode SqlStmt() :
         stmt = SqlMerge()
     |
         stmt = SqlProcedureCall()
-
-<#-- Add methods to parse additional statements here -->
-<#list parser.statementParserMethods as method>
-    |
-        stmt = ${method}
-</#list>
     )
     {
         return stmt;
@@ -1855,7 +1917,7 @@ SqlNode TableRef2(boolean lateral) :
             <SUBSTITUTE> <LPAREN> sample = StringLiteral() <RPAREN>
             {
                 String sampleName =
-                    ((NlsString) SqlLiteral.value(sample)).getValue();
+                    SqlLiteral.unchain(sample).getValueAs(String.class);
                 SqlSampleSpec sampleSpec = SqlSampleSpec.createNamed(sampleName);
                 final SqlLiteral sampleLiteral =
                     SqlLiteral.createSample(sampleSpec, s2.end(this));
@@ -2088,7 +2150,7 @@ SqlNode RowConstructor() :
         LOOKAHEAD(3)
         <LPAREN> { s = span(); }
         <ROW>
-        valueList = ParenthesizedQueryOrCommaList(ExprContext.ACCEPT_NONCURSOR)
+        valueList = ParenthesizedQueryOrCommaListWithDefault(ExprContext.ACCEPT_NONCURSOR)
         <RPAREN> { s.add(this); }
     |
         LOOKAHEAD(3)
@@ -2097,7 +2159,7 @@ SqlNode RowConstructor() :
         |
             { s = Span.of(); }
         )
-        valueList = ParenthesizedQueryOrCommaList(ExprContext.ACCEPT_NONCURSOR)
+        valueList = ParenthesizedQueryOrCommaListWithDefault(ExprContext.ACCEPT_NONCURSOR)
     |
         value = Expression(ExprContext.ACCEPT_NONCURSOR)
         {
@@ -2449,6 +2511,7 @@ SqlMatchRecognize MatchRecognizeOpt(SqlNode tableRef) :
     SqlNodeList partitionList = SqlNodeList.EMPTY;
     SqlNodeList orderList = SqlNodeList.EMPTY;
     SqlNode pattern;
+    SqlLiteral interval;
     SqlNodeList patternDefList;
     final SqlNode after;
     SqlParserPos pos;
@@ -2528,6 +2591,11 @@ SqlMatchRecognize MatchRecognizeOpt(SqlNode tableRef) :
         { isStrictEnds = SqlLiteral.createBoolean(false, getPos()); }
     )
     <RPAREN>
+    (
+        <WITHIN> interval = IntervalLiteral()
+    |
+        { interval = null; }
+    )
     [
         <SUBSET>
         subsetList = SubsetDefinitionCommaList(span())
@@ -2537,7 +2605,7 @@ SqlMatchRecognize MatchRecognizeOpt(SqlNode tableRef) :
     <RPAREN> {
         return new SqlMatchRecognize(s.end(this), tableRef,
             pattern, isStrictStarts, isStrictEnds, patternDefList, measureList,
-            after, subsetList, rowsPerMatch, partitionList, orderList);
+            after, subsetList, rowsPerMatch, partitionList, orderList, interval);
     }
 }
 
@@ -2969,6 +3037,7 @@ List<Object> Expression2(ExprContext exprContext) :
     SqlNodeList nodeList;
     SqlNode e;
     SqlOperator op;
+    String p;
     final Span s = span();
 }
 {
@@ -3090,6 +3159,15 @@ List<Object> Expression2(ExprContext exprContext) :
                             SqlStdOperatorTable.ITEM, getPos()));
                     list.add(e);
                 }
+                (
+                    <DOT>
+                    p = Identifier() {
+                        list.add(
+                            new SqlParserUtil.ToTreeListItem(
+                                SqlStdOperatorTable.DOT, getPos()));
+                        list.add(new SqlIdentifier(p, getPos()));
+                    }
+                )*
             |
                 {
                     checkNonQueryExpression(exprContext);
@@ -3267,6 +3345,22 @@ SqlCollation CollateClause() :
         return new SqlCollation(
             getToken(0).image, SqlCollation.Coercibility.EXPLICIT);
     }
+}
+
+/**
+ * Numeric literal or parameter; used in LIMIT, OFFSET and FETCH clauses.
+ */
+SqlNode UnsignedNumericLiteralOrParam() :
+{
+    final SqlNode e;
+}
+{
+    (
+        e = UnsignedNumericLiteral()
+    |
+        e = DynamicParam()
+    )
+    { return e; }
 }
 
 /**
@@ -4357,7 +4451,7 @@ SqlIdentifier TypeName() :
     }
 }
 
-// Types used for for JDBC and ODBC scalar conversion function
+// Types used for JDBC and ODBC scalar conversion function
 SqlTypeName SqlTypeName(Span s) :
 {
 }
@@ -4376,6 +4470,13 @@ SqlTypeName SqlTypeName(Span s) :
     <TIME> { return SqlTypeName.TIME; }
 |
     <TIMESTAMP> { return SqlTypeName.TIMESTAMP; }
+|
+    <GEOMETRY> {
+        if (!this.conformance.allowGeometry()) {
+            throw new ParseException(RESOURCE.geometryDisabled().str());
+        }
+        return SqlTypeName.GEOMETRY;
+    }
 |
     (<DECIMAL> | <DEC> | <NUMERIC>) { return SqlTypeName.DECIMAL; }
 |
@@ -5558,6 +5659,7 @@ SqlPostfixOperator PostfixRowOperator() :
 |   < G: "G" >
 |   < GENERAL: "GENERAL" >
 |   < GENERATED: "GENERATED" >
+|   < GEOMETRY: "GEOMETRY" >
 |   < GET: "GET" >
 |   < GLOBAL: "GLOBAL" >
 |   < GO: "GO" >
@@ -6099,6 +6201,7 @@ String CommonNonReservedKeyWord() :
     |   <G>
     |   <GENERAL>
     |   <GENERATED>
+    |   <GEOMETRY>
     |   <GO>
     |   <GOTO>
     |   <GRANTED>

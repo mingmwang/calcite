@@ -29,6 +29,7 @@ import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.convert.ConverterRule;
+import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.core.Sort;
 import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rel.logical.LogicalProject;
@@ -58,10 +59,10 @@ public class CassandraRules {
   private CassandraRules() {}
 
   public static final RelOptRule[] RULES = {
-    CassandraFilterRule.INSTANCE,
-    CassandraProjectRule.INSTANCE,
-    CassandraSortRule.INSTANCE,
-    CassandraLimitRule.INSTANCE
+      CassandraFilterRule.INSTANCE,
+      CassandraProjectRule.INSTANCE,
+      CassandraSortRule.INSTANCE,
+      CassandraLimitRule.INSTANCE
   };
 
   static List<String> cassandraFieldNames(final RelDataType rowType) {
@@ -92,17 +93,16 @@ public class CassandraRules {
   abstract static class CassandraConverterRule extends ConverterRule {
     protected final Convention out;
 
-    public CassandraConverterRule(
-        Class<? extends RelNode> clazz,
+    CassandraConverterRule(Class<? extends RelNode> clazz,
         String description) {
       this(clazz, Predicates.<RelNode>alwaysTrue(), description);
     }
 
-    public <R extends RelNode> CassandraConverterRule(
-        Class<R> clazz,
+    <R extends RelNode> CassandraConverterRule(Class<R> clazz,
         Predicate<? super R> predicate,
         String description) {
-      super(clazz, predicate, Convention.NONE, CassandraRel.CONVENTION, description);
+      super(clazz, predicate, Convention.NONE,
+          CassandraRel.CONVENTION, RelFactories.LOGICAL_BUILDER, description);
       this.out = CassandraRel.CONVENTION;
     }
   }

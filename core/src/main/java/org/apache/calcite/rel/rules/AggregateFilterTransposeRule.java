@@ -23,6 +23,7 @@ import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.plan.SubstitutionVisitor;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
+import org.apache.calcite.rel.core.Aggregate.Group;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.RelFactories;
@@ -66,7 +67,8 @@ public class AggregateFilterTransposeRule extends RelOptRule {
         RelFactories.LOGICAL_BUILDER);
   }
 
-  protected AggregateFilterTransposeRule(RelOptRuleOperand operand,
+  /** Creates an AggregateFilterTransposeRule. */
+  public AggregateFilterTransposeRule(RelOptRuleOperand operand,
       RelBuilderFactory relBuilderFactory) {
     super(operand, relBuilderFactory, null);
   }
@@ -106,7 +108,7 @@ public class AggregateFilterTransposeRule extends RelOptRule {
         RexUtil.apply(mapping, filter.getCondition());
     final Filter newFilter = filter.copy(filter.getTraitSet(),
         newAggregate, newCondition);
-    if (allColumnsInAggregate && !aggregate.indicator) {
+    if (allColumnsInAggregate && aggregate.getGroupType() == Group.SIMPLE) {
       // Everything needed by the filter is returned by the aggregate.
       assert newGroupSet.equals(aggregate.getGroupSet());
       call.transformTo(newFilter);
@@ -119,7 +121,7 @@ public class AggregateFilterTransposeRule extends RelOptRule {
         topGroupSet.set(newGroupSet.indexOf(c));
       }
       ImmutableList<ImmutableBitSet> newGroupingSets = null;
-      if (aggregate.indicator) {
+      if (aggregate.getGroupType() != Group.SIMPLE) {
         ImmutableList.Builder<ImmutableBitSet> newGroupingSetsBuilder =
                 ImmutableList.builder();
         for (ImmutableBitSet groupingSet : aggregate.getGroupSets()) {
@@ -147,8 +149,8 @@ public class AggregateFilterTransposeRule extends RelOptRule {
         }
         topAggCallList.add(
             AggregateCall.create(rollup, aggregateCall.isDistinct(),
-                ImmutableList.of(i++), -1, aggregateCall.type,
-                aggregateCall.name));
+                aggregateCall.isApproximate(), ImmutableList.of(i++), -1,
+                aggregateCall.type, aggregateCall.name));
       }
       final Aggregate topAggregate =
           aggregate.copy(aggregate.getTraitSet(), newFilter,

@@ -63,9 +63,9 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
   private final ImmutableList<AccumulatorFactory> accumulatorFactories;
   private final DataContext dataContext;
 
-  public AggregateNode(Interpreter interpreter, Aggregate rel) {
-    super(interpreter, rel);
-    this.dataContext = interpreter.getDataContext();
+  public AggregateNode(Compiler compiler, Aggregate rel) {
+    super(compiler, rel);
+    this.dataContext = compiler.getDataContext();
 
     ImmutableBitSet union = ImmutableBitSet.of();
 
@@ -356,7 +356,7 @@ public class AggregateNode extends AbstractSingleNode<Aggregate> {
   /**
    * A list of accumulators used during grouping.
    */
-  private class AccumulatorList extends ArrayList<Accumulator> {
+  private static class AccumulatorList extends ArrayList<Accumulator> {
     public void send(Row row) {
       for (Accumulator a : this) {
         a.send(row);

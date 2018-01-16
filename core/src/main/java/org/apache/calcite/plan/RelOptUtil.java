@@ -373,7 +373,7 @@ public abstract class RelOptUtil {
       final RelDataType type2 = pair.right.getType();
       // If one of the types is ANY comparison should succeed
       if (type1.getSqlTypeName() == SqlTypeName.ANY
-        || type2.getSqlTypeName() == SqlTypeName.ANY) {
+          || type2.getSqlTypeName() == SqlTypeName.ANY) {
         continue;
       }
       if (!type1.equals(type2)) {
@@ -433,9 +433,7 @@ public abstract class RelOptUtil {
       } else if (node.e.isA(SqlKind.CAST)) {
         final RexNode operand = ((RexCall) node.e).getOperands().get(0);
         if (operand instanceof RexInputRef) {
-          mapping.set(
-            node.i,
-            ((RexInputRef) operand).getIndex());
+          mapping.set(node.i, ((RexInputRef) operand).getIndex());
         }
       }
     }
@@ -502,6 +500,7 @@ public abstract class RelOptUtil {
       final AggregateCall aggCall =
           AggregateCall.create(SqlStdOperatorTable.MIN,
               false,
+              false,
               ImmutableList.of(0),
               -1,
               0,
@@ -510,7 +509,7 @@ public abstract class RelOptUtil {
               extraName);
 
       ret =
-          LogicalAggregate.create(ret, false,
+          LogicalAggregate.create(ret,
               ImmutableBitSet.of(), null, ImmutableList.of(aggCall));
     }
 
@@ -547,7 +546,7 @@ public abstract class RelOptUtil {
     switch (logic) {
     case TRUE_FALSE_UNKNOWN:
     case UNKNOWN_AS_TRUE:
-      if (!containsNullableFields(seekRel)) {
+      if (notIn && !containsNullableFields(seekRel)) {
         logic = Logic.TRUE_FALSE;
       }
     }
@@ -559,8 +558,7 @@ public abstract class RelOptUtil {
         || logic == RelOptUtil.Logic.TRUE_FALSE_UNKNOWN;
     if (!outerJoin) {
       final LogicalAggregate aggregate =
-          LogicalAggregate.create(ret, false,
-              ImmutableBitSet.range(keyCount), null,
+          LogicalAggregate.create(ret, ImmutableBitSet.range(keyCount), null,
               ImmutableList.<AggregateCall>of());
       return new Exists(aggregate, false, false);
     }
@@ -581,6 +579,7 @@ public abstract class RelOptUtil {
     final AggregateCall aggCall =
         AggregateCall.create(SqlStdOperatorTable.MIN,
             false,
+            false,
             ImmutableList.of(projectedKeyCount),
             -1,
             projectedKeyCount,
@@ -588,9 +587,8 @@ public abstract class RelOptUtil {
             null,
             null);
 
-    ret = LogicalAggregate.create(ret, false,
-        ImmutableBitSet.range(projectedKeyCount), null,
-        ImmutableList.of(aggCall));
+    ret = LogicalAggregate.create(ret, ImmutableBitSet.range(projectedKeyCount),
+        null, ImmutableList.of(aggCall));
 
     switch (logic) {
     case TRUE_FALSE_UNKNOWN:
@@ -785,18 +783,17 @@ public abstract class RelOptUtil {
     for (int i = 0; i < aggCallCnt; i++) {
       aggCalls.add(
           AggregateCall.create(
-              SqlStdOperatorTable.SINGLE_VALUE, false, ImmutableList.of(i), -1,
-              0, rel, null, null));
+              SqlStdOperatorTable.SINGLE_VALUE, false, false,
+              ImmutableList.of(i), -1, 0, rel, null, null));
     }
 
-    return LogicalAggregate.create(rel, false,
-        ImmutableBitSet.of(), null, aggCalls);
+    return LogicalAggregate.create(rel, ImmutableBitSet.of(), null, aggCalls);
   }
 
   /** @deprecated Use {@link RelBuilder#distinct()}. */
   @Deprecated // to be removed before 2.0
   public static RelNode createDistinctRel(RelNode rel) {
-    return LogicalAggregate.create(rel, false,
+    return LogicalAggregate.create(rel,
         ImmutableBitSet.range(rel.getRowType().getFieldCount()), null,
         ImmutableList.<AggregateCall>of());
   }
@@ -1925,10 +1922,8 @@ public abstract class RelOptUtil {
 
     // The result of IS DISTINCT FROM is NOT NULL because it can
     // only return TRUE or FALSE.
-    ret =
-        rexBuilder.makeCast(
-            rexBuilder.getTypeFactory().createSqlType(SqlTypeName.BOOLEAN),
-            ret);
+    assert ret != null;
+    assert !ret.getType().isNullable();
 
     return ret;
   }
@@ -1947,6 +1942,8 @@ public abstract class RelOptUtil {
       nullOp = SqlStdOperatorTable.IS_NOT_NULL;
       eqOp = SqlStdOperatorTable.NOT_EQUALS;
     }
+    // By the time the ELSE is reached, x and y are known to be not null;
+    // therefore the whole CASE is not null.
     RexNode[] whenThenElse = {
         // when x is null
         rexBuilder.makeCall(SqlStdOperatorTable.IS_NULL, x),
@@ -1961,7 +1958,9 @@ public abstract class RelOptUtil {
         rexBuilder.makeCall(nullOp, x),
 
         // else return x compared to y
-        rexBuilder.makeCall(eqOp, x, y)
+        rexBuilder.makeCall(eqOp,
+            rexBuilder.makeNotNull(x),
+            rexBuilder.makeNotNull(y))
     };
     return rexBuilder.makeCall(
         SqlStdOperatorTable.CASE,
@@ -3294,12 +3293,7 @@ public abstract class RelOptUtil {
     return relBuilder.build();
   }
 
-  /**
-   * Pushes down expressions in "equal" join condition, using the default
-   * builder.
-   *
-   * @see #pushDownJoinConditions(Join, RelBuilder)
-   */
+  @Deprecated // to be removed before 2.0
   public static RelNode pushDownJoinConditions(Join originalJoin) {
     return pushDownJoinConditions(originalJoin, RelFactories.LOGICAL_BUILDER);
   }

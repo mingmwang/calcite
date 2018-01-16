@@ -464,7 +464,8 @@ with the adapter and find a more efficient way of accessing the data.
 This negotiation is a simple form of query optimization. Calcite supports query
 optimization by adding <i>planner rules</i>. Planner rules operate by
 looking for patterns in the query parse tree (for instance a project on top
-of a certain kind of table), and
+of a certain kind of table), and replacing the matched nodes in the tree by
+a new set of nodes which implement the optimization.
 
 Planner rules are also extensible, like schemas and tables. So, if you have a
 data store that you want to access via SQL, you first define a custom table or
@@ -718,43 +719,6 @@ initial implementations.
 
 ## Further topics
 
-### Defining a custom schema
+There are many other ways to extend Calcite not yet described in this tutorial.
+The [adapter specification](adapter.html) describes the APIs involved.
 
-(To be written.)
-
-### Modifying data
-
-How to enable DML operations (INSERT, UPDATE and DELETE) on your schema.
-
-(To be written.)
-
-### Calling conventions
-
-(To be written.)
-
-### Statistics and cost
-
-(To be written.)
-
-### Defining and using user-defined functions
-
-(To be written.)
-
-###  Defining tables in a schema
-
-(To be written.)
-
-### Defining custom tables
-
-(To be written.)
-
-### Built-in SQL implementation
-
-How does Calcite implement SQL, if an adapter does not implement all of the core
-relational operators?
-
-(To be written.)
-
-### Table functions
-
-(To be written.)

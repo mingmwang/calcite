@@ -49,6 +49,7 @@ import org.apache.calcite.rex.RexWindowBound;
 import org.apache.calcite.runtime.SortedMultiMap;
 import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.util.BuiltInMethod;
+import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Pair;
 import org.apache.calcite.util.Util;
 
@@ -276,7 +277,7 @@ public class EnumerableWindow extends Window implements EnumerableRel {
 
       final List<Expression> outputRow = new ArrayList<Expression>();
       int fieldCountWithAggResults =
-        inputPhysType.getRowType().getFieldCount();
+          inputPhysType.getRowType().getFieldCount();
       for (int i = 0; i < fieldCountWithAggResults; i++) {
         outputRow.add(
             inputPhysType.fieldReference(
@@ -520,7 +521,7 @@ public class EnumerableWindow extends Window implements EnumerableRel {
   }
 
   private Function<BlockBuilder, WinAggFrameResultContext>
-  getBlockBuilderWinAggFrameResultContextFunction(
+      getBlockBuilderWinAggFrameResultContextFunction(
       final JavaTypeFactory typeFactory, final Result result,
       final List<Expression> translatedConstants,
       final Expression comparator_,
@@ -787,6 +788,22 @@ public class EnumerableWindow extends Window implements EnumerableRel {
             public List<? extends RelDataType> parameterRelTypes() {
               return EnumUtils.fieldRowTypes(result.physType.getRowType(),
                   constants, agg.call.getArgList());
+            }
+
+            public List<ImmutableBitSet> groupSets() {
+              throw new UnsupportedOperationException();
+            }
+
+            public List<Integer> keyOrdinals() {
+              throw new UnsupportedOperationException();
+            }
+
+            public List<? extends RelDataType> keyRelTypes() {
+              throw new UnsupportedOperationException();
+            }
+
+            public List<? extends Type> keyTypes() {
+              throw new UnsupportedOperationException();
             }
           };
       String aggName = "a" + agg.aggIdx;

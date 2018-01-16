@@ -44,7 +44,7 @@ public class SqlTimeLiteral extends SqlAbstractDateTimeLiteral {
     return (TimeString) value;
   }
 
-  public SqlNode clone(SqlParserPos pos) {
+  @Override public SqlTimeLiteral clone(SqlParserPos pos) {
     return new SqlTimeLiteral((TimeString) value, precision, hasTimeZone, pos);
   }
 
@@ -57,6 +57,13 @@ public class SqlTimeLiteral extends SqlAbstractDateTimeLiteral {
    */
   public String toFormattedString() {
     return getTime().toString(precision);
+  }
+
+  public void unparse(
+      SqlWriter writer,
+      int leftPrec,
+      int rightPrec) {
+    writer.getDialect().unparseDateTimeLiteral(writer, this, leftPrec, rightPrec);
   }
 }
 

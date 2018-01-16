@@ -34,12 +34,17 @@ import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlSelectKeyword;
+import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.SqlTypeName;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+
+import org.joda.time.DateTime;
+import org.joda.time.Interval;
+import org.joda.time.chrono.ISOChronology;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -52,14 +57,15 @@ import java.util.Set;
 public class DruidTable extends AbstractTable implements TranslatableTable {
 
   public static final String DEFAULT_TIMESTAMP_COLUMN = "__time";
-  public static final LocalInterval DEFAULT_INTERVAL =
-      LocalInterval.create("1900-01-01", "3000-01-01");
+  public static final Interval DEFAULT_INTERVAL =
+      new Interval(new DateTime("1900-01-01", ISOChronology.getInstanceUTC()),
+          new DateTime("3000-01-01", ISOChronology.getInstanceUTC()));
 
   final DruidSchema schema;
   final String dataSource;
   final RelProtoDataType protoRowType;
   final ImmutableSet<String> metricFieldNames;
-  final ImmutableList<LocalInterval> intervals;
+  final ImmutableList<Interval> intervals;
   final String timestampFieldName;
   final ImmutableMap<String, List<ComplexMetric>> complexMetrics;
   final ImmutableMap<String, SqlTypeName> allFields;
@@ -76,7 +82,7 @@ public class DruidTable extends AbstractTable implements TranslatableTable {
    */
   public DruidTable(DruidSchema schema, String dataSource,
       RelProtoDataType protoRowType, Set<String> metricFieldNames,
-      String timestampFieldName, List<LocalInterval> intervals,
+      String timestampFieldName, List<Interval> intervals,
       Map<String, List<ComplexMetric>> complexMetrics, Map<String, SqlTypeName> allFields) {
     this.timestampFieldName = Preconditions.checkNotNull(timestampFieldName);
     this.schema = Preconditions.checkNotNull(schema);
@@ -91,22 +97,22 @@ public class DruidTable extends AbstractTable implements TranslatableTable {
             : ImmutableMap.copyOf(allFields);
   }
 
-  /** Creates a {@link DruidTable}
+  /** Creates a {@link DruidTable} by using the given {@link DruidConnectionImpl}
+   * to populate the other parameters. The parameters may be partially populated.
    *
    * @param druidSchema Druid schema
    * @param dataSourceName Data source name in Druid, also table name
    * @param intervals Intervals, or null to use default
-   * @param fieldMap Mutable map of fields (dimensions plus metrics);
-   *        may be partially populated already
-   * @param metricNameSet Mutable set of metric names;
-   *        may be partially populated already
+   * @param fieldMap Partially populated map of fields (dimensions plus metrics)
+   * @param metricNameSet Partially populated set of metric names
    * @param timestampColumnName Name of timestamp column, or null
-   * @param connection connection used to find column definitions. Must be non-null.
+   * @param connection Connection used to find column definitions; Must be non-null
+   * @param complexMetrics List of complex metrics in Druid (thetaSketch, hyperUnique)
    *
    * @return A table
    */
   static Table create(DruidSchema druidSchema, String dataSourceName,
-      List<LocalInterval> intervals, Map<String, SqlTypeName> fieldMap,
+      List<Interval> intervals, Map<String, SqlTypeName> fieldMap,
       Set<String> metricNameSet, String timestampColumnName,
       DruidConnectionImpl connection, Map<String, List<ComplexMetric>> complexMetrics) {
     assert connection != null;
@@ -118,27 +124,32 @@ public class DruidTable extends AbstractTable implements TranslatableTable {
             metricNameSet, timestampColumnName, complexMetrics);
   }
 
-  /** Creates a {@link DruidTable}
+  /** Creates a {@link DruidTable} by copying the given parameters.
    *
    * @param druidSchema Druid schema
    * @param dataSourceName Data source name in Druid, also table name
    * @param intervals Intervals, or null to use default
-   * @param fieldMap Mutable map of fields (dimensions plus metrics);
-   *        may be partially populated already
-   * @param metricNameSet Mutable set of metric names;
-   *        may be partially populated already
+   * @param fieldMap Fully populated map of fields (dimensions plus metrics)
+   * @param metricNameSet Fully populated set of metric names
    * @param timestampColumnName Name of timestamp column, or null
+   * @param complexMetrics List of complex metrics in Druid (thetaSketch, hyperUnique)
+   *
    * @return A table
    */
   static Table create(DruidSchema druidSchema, String dataSourceName,
-                      List<LocalInterval> intervals, Map<String, SqlTypeName> fieldMap,
+                      List<Interval> intervals, Map<String, SqlTypeName> fieldMap,
                       Set<String> metricNameSet, String timestampColumnName,
                       Map<String, List<ComplexMetric>> complexMetrics) {
     final ImmutableMap<String, SqlTypeName> fields =
             ImmutableMap.copyOf(fieldMap);
-    return new DruidTable(druidSchema, dataSourceName,
-            new MapRelProtoDataType(fields), ImmutableSet.copyOf(metricNameSet),
-            timestampColumnName, intervals, complexMetrics, fieldMap);
+    return new DruidTable(druidSchema,
+        dataSourceName,
+        new MapRelProtoDataType(fields, timestampColumnName),
+        ImmutableSet.copyOf(metricNameSet),
+        timestampColumnName,
+        intervals,
+        complexMetrics,
+        fieldMap);
   }
 
   /**
@@ -173,11 +184,12 @@ public class DruidTable extends AbstractTable implements TranslatableTable {
     assert isRolledUp(column);
     // Our rolled up columns are only allowed in COUNT(DISTINCT ...) aggregate functions.
     // We only allow this when approximate results are acceptable.
-    return config != null
-            && config.approximateDistinctCount()
-            && isCountDistinct(call)
-            && call.getOperandList().size() == 1 // for COUNT(a_1, a_2, ... a_n). n should be 1
-            && isValidParentKind(parent);
+    return ((config != null
+                && config.approximateDistinctCount()
+                && isCountDistinct(call))
+            || call.getOperator() == SqlStdOperatorTable.APPROX_COUNT_DISTINCT)
+        && call.getOperandList().size() == 1 // for COUNT(a_1, a_2, ... a_n). n should be 1
+        && isValidParentKind(parent);
   }
 
   private boolean isValidParentKind(SqlNode node) {
@@ -244,15 +256,25 @@ public class DruidTable extends AbstractTable implements TranslatableTable {
    * field names and types. */
   private static class MapRelProtoDataType implements RelProtoDataType {
     private final ImmutableMap<String, SqlTypeName> fields;
+    private final String timestampColumn;
 
     MapRelProtoDataType(ImmutableMap<String, SqlTypeName> fields) {
       this.fields = fields;
+      this.timestampColumn = DruidTable.DEFAULT_TIMESTAMP_COLUMN;
+    }
+
+    MapRelProtoDataType(ImmutableMap<String, SqlTypeName> fields, String timestampColumn) {
+      this.fields = fields;
+      this.timestampColumn = timestampColumn;
     }
 
     public RelDataType apply(RelDataTypeFactory typeFactory) {
       final RelDataTypeFactory.Builder builder = typeFactory.builder();
       for (Map.Entry<String, SqlTypeName> field : fields.entrySet()) {
-        builder.add(field.getKey(), field.getValue()).nullable(true);
+        final String key = field.getKey();
+        builder.add(key, field.getValue())
+            // Druid's time column is always not null and the only column called __time.
+            .nullable(!timestampColumn.equals(key));
       }
       return builder.build();
     }

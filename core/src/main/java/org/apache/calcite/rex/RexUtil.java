@@ -17,6 +17,7 @@
 package org.apache.calcite.rex;
 
 import org.apache.calcite.linq4j.function.Predicate1;
+import org.apache.calcite.plan.RelOptPredicateList;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.RelCollations;
@@ -307,6 +308,17 @@ public class RexUtil {
           call.getType());
     }
     return false;
+  }
+
+  /** Removes any casts that change nullability but not type.
+   *
+   * <p>For example, {@code CAST(1 = 0 AS BOOLEAN)} becomes {@code 1 = 0}. */
+  public static RexNode removeNullabilityCast(RelDataTypeFactory typeFactory,
+      RexNode node) {
+    while (isNullabilityCast(typeFactory, node)) {
+      node = ((RexCall) node).operands.get(0);
+    }
+    return node;
   }
 
   /** Creates a map containing each (e, constant) pair that occurs within
@@ -1673,8 +1685,8 @@ public class RexUtil {
   @Deprecated // to be removed before 2.0
   public static RexNode simplifyPreservingType(RexBuilder rexBuilder,
       RexNode e) {
-    return new RexSimplify(rexBuilder, false, EXECUTOR)
-        .simplifyPreservingType(e);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY, false,
+        EXECUTOR).simplifyPreservingType(e);
   }
 
   /**
@@ -1686,8 +1698,8 @@ public class RexUtil {
    */
   @Deprecated // to be removed before 2.0
   public static RexNode simplify(RexBuilder rexBuilder, RexNode e) {
-    return new RexSimplify(rexBuilder, false, EXECUTOR)
-        .simplify(e);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY, false,
+        EXECUTOR).simplify(e);
   }
 
   /**
@@ -1717,8 +1729,8 @@ public class RexUtil {
   @Deprecated // to be removed before 2.0
   public static RexNode simplify(RexBuilder rexBuilder, RexNode e,
       boolean unknownAsFalse) {
-    return new RexSimplify(rexBuilder, unknownAsFalse, EXECUTOR)
-        .simplify(e);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY,
+        unknownAsFalse, EXECUTOR).simplify(e);
   }
 
   /**
@@ -1730,15 +1742,15 @@ public class RexUtil {
   @Deprecated // to be removed before 2.0
   public static RexNode simplifyAnds(RexBuilder rexBuilder,
       Iterable<? extends RexNode> nodes) {
-    return new RexSimplify(rexBuilder, false, EXECUTOR)
-        .simplifyAnds(nodes);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY, false,
+        EXECUTOR).simplifyAnds(nodes);
   }
 
   @Deprecated // to be removed before 2.0
   public static RexNode simplifyAnds(RexBuilder rexBuilder,
       Iterable<? extends RexNode> nodes, boolean unknownAsFalse) {
-    return new RexSimplify(rexBuilder, unknownAsFalse, EXECUTOR)
-        .simplifyAnds(nodes);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY,
+        unknownAsFalse, EXECUTOR).simplifyAnds(nodes);
   }
 
   /** Negates a logical expression by adding or removing a NOT. */
@@ -1788,22 +1800,23 @@ public class RexUtil {
   @Deprecated // to be removed before 2.0
   public static RexNode simplifyAnd(RexBuilder rexBuilder, RexCall e,
       boolean unknownAsFalse) {
-    return new RexSimplify(rexBuilder, unknownAsFalse, EXECUTOR)
-        .simplifyAnd(e);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY,
+        unknownAsFalse, EXECUTOR).simplifyAnd(e);
   }
 
   @Deprecated // to be removed before 2.0
   public static RexNode simplifyAnd2(RexBuilder rexBuilder,
       List<RexNode> terms, List<RexNode> notTerms) {
-    return new RexSimplify(rexBuilder, false, EXECUTOR)
-        .simplifyAnd2(terms, notTerms);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY, false,
+        EXECUTOR).simplifyAnd2(terms, notTerms);
   }
 
   @Deprecated // to be removed before 2.0
   public static RexNode simplifyAnd2ForUnknownAsFalse(RexBuilder rexBuilder,
       List<RexNode> terms, List<RexNode> notTerms) {
-    return new RexSimplify(rexBuilder, true, EXECUTOR)
-        .simplifyAnd2ForUnknownAsFalse(terms, notTerms);
+    final Class<Comparable> clazz = Comparable.class;
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY, true,
+        EXECUTOR).simplifyAnd2ForUnknownAsFalse(terms, notTerms);
   }
 
   public static RexNode negate(RexBuilder rexBuilder, RexCall call) {
@@ -1836,15 +1849,15 @@ public class RexUtil {
 
   @Deprecated // to be removed before 2.0
   public static RexNode simplifyOr(RexBuilder rexBuilder, RexCall call) {
-    return new RexSimplify(rexBuilder, false, EXECUTOR)
-        .simplifyOr(call);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY, false,
+        EXECUTOR).simplifyOr(call);
   }
 
   @Deprecated // to be removed before 2.0
   public static RexNode simplifyOrs(RexBuilder rexBuilder,
       List<RexNode> terms) {
-    return new RexSimplify(rexBuilder, false, EXECUTOR)
-        .simplifyOrs(terms);
+    return new RexSimplify(rexBuilder, RelOptPredicateList.EMPTY, false,
+        EXECUTOR).simplifyOrs(terms);
   }
 
   /**
@@ -2024,12 +2037,12 @@ public class RexUtil {
   public static Set<RelTableRef> gatherTableReferences(final List<RexNode> nodes) {
     final Set<RelTableRef> occurrences = new HashSet<>();
     RexVisitor<Void> visitor =
-      new RexVisitorImpl<Void>(true) {
-        @Override public Void visitTableInputRef(RexTableInputRef ref) {
-          occurrences.add(ref.getTableRef());
-          return super.visitTableInputRef(ref);
-        }
-      };
+        new RexVisitorImpl<Void>(true) {
+          @Override public Void visitTableInputRef(RexTableInputRef ref) {
+            occurrences.add(ref.getTableRef());
+            return super.visitTableInputRef(ref);
+          }
+        };
     for (RexNode e : nodes) {
       e.accept(visitor);
     }
@@ -2136,7 +2149,7 @@ public class RexUtil {
     private int limit = -1;
     private final RelDataType inputRowType;
 
-    public ForwardRefFinder(RelDataType inputRowType) {
+    ForwardRefFinder(RelDataType inputRowType) {
       super(true);
       this.inputRowType = inputRowType;
     }
@@ -2442,7 +2455,7 @@ public class RexUtil {
   private static class RexShiftShuttle extends RexShuttle {
     private final int offset;
 
-    public RexShiftShuttle(int offset) {
+    RexShiftShuttle(int offset) {
       this.offset = offset;
     }
 
@@ -2572,10 +2585,17 @@ public class RexUtil {
   public static class ExprSimplifier extends RexShuttle {
     private final RexSimplify simplify;
     private final Map<RexNode, Boolean> unknownAsFalseMap;
+    private final boolean matchNullability;
 
+    @Deprecated // to be removed before 2.0
     public ExprSimplifier(RexSimplify simplify) {
+      this(simplify, true);
+    }
+
+    public ExprSimplifier(RexSimplify simplify, boolean matchNullability) {
       this.simplify = simplify;
       this.unknownAsFalseMap = new HashMap<>();
+      this.matchNullability = matchNullability;
     }
 
     @Override public RexNode visitCall(RexCall call) {
@@ -2609,7 +2629,7 @@ public class RexUtil {
       if (simplifiedNode.getType().equals(call.getType())) {
         return simplifiedNode;
       }
-      return simplify.rexBuilder.makeCast(call.getType(), simplifiedNode, true);
+      return simplify.rexBuilder.makeCast(call.getType(), simplifiedNode, matchNullability);
     }
   }
 }

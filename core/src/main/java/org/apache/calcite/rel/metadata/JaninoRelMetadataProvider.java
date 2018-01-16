@@ -54,6 +54,7 @@ import org.apache.calcite.rel.stream.LogicalDelta;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.util.ControlFlowException;
 import org.apache.calcite.util.Pair;
+import org.apache.calcite.util.SaffronProperties;
 import org.apache.calcite.util.Util;
 
 import com.google.common.cache.CacheBuilder;
@@ -106,14 +107,16 @@ public class JaninoRelMetadataProvider implements RelMetadataProvider {
    * For the cache to be effective, providers should implement identity
    * correctly. */
   private static final LoadingCache<Key, MetadataHandler> HANDLERS =
-      CacheBuilder.newBuilder().build(
-          new CacheLoader<Key, MetadataHandler>() {
-            public MetadataHandler load(@Nonnull Key key) {
-              //noinspection unchecked
-              return load3(key.def, key.provider.handlers(key.def),
-                  key.relClasses);
-            }
-          });
+      maxSize(CacheBuilder.newBuilder(),
+          SaffronProperties.INSTANCE.metadataHandlerCacheMaximumSize().get())
+          .build(
+              new CacheLoader<Key, MetadataHandler>() {
+                public MetadataHandler load(@Nonnull Key key) {
+                  //noinspection unchecked
+                  return load3(key.def, key.provider.handlers(key.def),
+                      key.relClasses);
+                }
+              });
 
   // Pre-register the most common relational operators, to reduce the number of
   // times we re-generate.
@@ -168,6 +171,15 @@ public class JaninoRelMetadataProvider implements RelMetadataProvider {
     return new JaninoRelMetadataProvider(provider);
   }
 
+  // helper for initialization
+  private static <K, V> CacheBuilder<K, V> maxSize(CacheBuilder<K, V> builder,
+      int size) {
+    if (size >= 0) {
+      builder.maximumSize(size);
+    }
+    return builder;
+  }
+
   @Override public boolean equals(Object obj) {
     return obj == this
         || obj instanceof JaninoRelMetadataProvider
@@ -184,13 +196,12 @@ public class JaninoRelMetadataProvider implements RelMetadataProvider {
   }
 
   public <M extends Metadata> Multimap<Method, MetadataHandler<M>>
-  handlers(MetadataDef<M> def) {
+      handlers(MetadataDef<M> def) {
     return provider.handlers(def);
   }
 
-  private static <M extends Metadata>
-  MetadataHandler<M> load3(MetadataDef<M> def,
-      Multimap<Method, MetadataHandler<M>> map,
+  private static <M extends Metadata> MetadataHandler<M> load3(
+      MetadataDef<M> def, Multimap<Method, MetadataHandler<M>> map,
       ImmutableList<Class<? extends RelNode>> relClasses) {
     final StringBuilder buff = new StringBuilder();
     final String name =
@@ -379,8 +390,8 @@ public class JaninoRelMetadataProvider implements RelMetadataProvider {
     }
   }
 
-  private static String
-  findProvider(List<Pair<String, MetadataHandler>> providerList,
+  private static String findProvider(
+      List<Pair<String, MetadataHandler>> providerList,
       Class<?> declaringClass) {
     for (Pair<String, MetadataHandler> pair : providerList) {
       if (declaringClass.isInstance(pair.right)) {
@@ -424,8 +435,8 @@ public class JaninoRelMetadataProvider implements RelMetadataProvider {
     return buff;
   }
 
-  static <M extends Metadata> MetadataHandler<M>
-  compile(ClassDeclaration expr, String s, MetadataDef<M> def,
+  static <M extends Metadata> MetadataHandler<M> compile(ClassDeclaration expr,
+      String s, MetadataDef<M> def,
       List<Object> argList) throws CompileException, IOException {
     final ICompilerFactory compilerFactory;
     try {
@@ -456,8 +467,8 @@ public class JaninoRelMetadataProvider implements RelMetadataProvider {
     return def.handlerClass.cast(o);
   }
 
-  synchronized <M extends Metadata, H extends MetadataHandler<M>> H
-  create(MetadataDef<M> def) {
+  synchronized <M extends Metadata, H extends MetadataHandler<M>> H create(
+      MetadataDef<M> def) {
     try {
       final Key key = new Key((MetadataDef) def, provider,
           ImmutableList.copyOf(ALL_RELS));
@@ -469,8 +480,8 @@ public class JaninoRelMetadataProvider implements RelMetadataProvider {
     }
   }
 
-  synchronized <M extends Metadata, H extends MetadataHandler<M>> H
-  revise(Class<? extends RelNode> rClass, MetadataDef<M> def) {
+  synchronized <M extends Metadata, H extends MetadataHandler<M>> H revise(
+      Class<? extends RelNode> rClass, MetadataDef<M> def) {
     if (ALL_RELS.add(rClass)) {
       HANDLERS.invalidateAll();
     }

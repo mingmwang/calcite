@@ -16,6 +16,7 @@
  */
 package org.apache.calcite.rel.rel2sql;
 
+import org.apache.calcite.config.NullCollation;
 import org.apache.calcite.plan.RelOptLattice;
 import org.apache.calcite.plan.RelOptMaterialization;
 import org.apache.calcite.plan.RelOptPlanner;
@@ -28,8 +29,10 @@ import org.apache.calcite.rel.rules.UnionMergeRule;
 import org.apache.calcite.runtime.FlatLists;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.sql.SqlDialect;
-import org.apache.calcite.sql.SqlDialect.DatabaseProduct;
 import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.dialect.CalciteSqlDialect;
+import org.apache.calcite.sql.dialect.HiveSqlDialect;
+import org.apache.calcite.sql.dialect.MysqlSqlDialect;
 import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.calcite.sql2rel.SqlToRelConverter;
 import org.apache.calcite.test.CalciteAssert;
@@ -74,7 +77,7 @@ public class RelToSqlConverterTest {
   /** Initiates a test case with a given SQL query. */
   private Sql sql(String sql) {
     return new Sql(CalciteAssert.SchemaSpec.JDBC_FOODMART, sql,
-        SqlDialect.CALCITE, DEFAULT_REL_CONFIG,
+        CalciteSqlDialect.DEFAULT, DEFAULT_REL_CONFIG,
         ImmutableList.<Function<RelNode, RelNode>>of());
   }
 
@@ -90,6 +93,13 @@ public class RelToSqlConverterTest {
         .programs(programs)
         .build();
     return Frameworks.getPlanner(config);
+  }
+
+  private static MysqlSqlDialect mySqlDialect(NullCollation nullCollation) {
+    return new MysqlSqlDialect(SqlDialect.EMPTY_CONTEXT
+        .withDatabaseProduct(SqlDialect.DatabaseProduct.MYSQL)
+        .withIdentifierQuoteString("`")
+        .withNullCollation(nullCollation));
   }
 
   @Test public void testSimpleSelectStarFromProductTable() {
@@ -188,6 +198,47 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\"\n"
         + "GROUP BY \"product_class_id\", \"product_id\"";
     sql(query).ok(expected);
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-1946">[CALCITE-1946]
+   * JDBC adapter should generate sub-SELECT if dialect does not support nested
+   * aggregate functions</a>. */
+  @Test public void testNestedAggregates() {
+    // PostgreSQL, MySQL, Vertica do not support nested aggregate functions, so
+    // for these, the JDBC adapter generates a SELECT in the FROM clause.
+    // Oracle can do it in a single SELECT.
+    final String query = "select\n"
+        + "    SUM(\"net_weight1\") as \"net_weight_converted\"\n"
+        + "  from ("
+        + "    select\n"
+        + "       SUM(\"net_weight\") as \"net_weight1\"\n"
+        + "    from \"foodmart\".\"product\"\n"
+        + "    group by \"product_id\")";
+    final String expectedOracle = "SELECT SUM(SUM(\"net_weight\")) \"net_weight_converted\"\n"
+        + "FROM \"foodmart\".\"product\"\n"
+        + "GROUP BY \"product_id\"";
+    final String expectedMySQL = "SELECT SUM(`net_weight1`) AS `net_weight_converted`\n"
+        + "FROM (SELECT SUM(`net_weight`) AS `net_weight1`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "GROUP BY `product_id`) AS `t1`";
+    final String expectedVertica = "SELECT SUM(\"net_weight1\") AS \"net_weight_converted\"\n"
+        + "FROM (SELECT SUM(\"net_weight\") AS \"net_weight1\"\n"
+        + "FROM \"foodmart\".\"product\"\n"
+        + "GROUP BY \"product_id\") AS \"t1\"";
+    final String expectedPostgresql = "SELECT SUM(\"net_weight1\") AS \"net_weight_converted\"\n"
+        + "FROM (SELECT SUM(\"net_weight\") AS \"net_weight1\"\n"
+        + "FROM \"foodmart\".\"product\"\n"
+        + "GROUP BY \"product_id\") AS \"t1\"";
+    sql(query)
+        .withOracle()
+        .ok(expectedOracle)
+        .withMysql()
+        .ok(expectedMySQL)
+        .withVertica()
+        .ok(expectedVertica)
+        .withPostgresql()
+        .ok(expectedPostgresql);
   }
 
   @Test public void testSelectQueryWithGroupByAndProjectList1() {
@@ -296,8 +347,223 @@ public class RelToSqlConverterTest {
     final String expected = "SELECT product_id\n"
         + "FROM foodmart.product\n"
         + "LIMIT 100\nOFFSET 10";
-    sql(query).dialect(SqlDialect.DatabaseProduct.HIVE.getDialect())
-        .ok(expected);
+    sql(query).withHive().ok(expected);
+  }
+
+  @Test public void testHiveSelectQueryWithOrderByDescAndNullsFirstShouldBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls first";
+    final String expected = "SELECT product_id\n"
+        + "FROM foodmart.product\n"
+        + "ORDER BY product_id IS NULL DESC, product_id DESC";
+    sql(query).dialect(HiveSqlDialect.DEFAULT).ok(expected);
+  }
+
+  @Test public void testHiveSelectQueryWithOrderByAscAndNullsLastShouldBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls last";
+    final String expected = "SELECT product_id\n"
+        + "FROM foodmart.product\n"
+        + "ORDER BY product_id IS NULL, product_id";
+    sql(query).dialect(HiveSqlDialect.DEFAULT).ok(expected);
+  }
+
+  @Test public void testHiveSelectQueryWithOrderByAscNullsFirstShouldNotAddNullEmulation() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls first";
+    final String expected = "SELECT product_id\n"
+        + "FROM foodmart.product\n"
+        + "ORDER BY product_id";
+    sql(query).dialect(HiveSqlDialect.DEFAULT).ok(expected);
+  }
+
+  @Test public void testHiveSelectQueryWithOrderByDescNullsLastShouldNotAddNullEmulation() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls last";
+    final String expected = "SELECT product_id\n"
+        + "FROM foodmart.product\n"
+        + "ORDER BY product_id DESC";
+    sql(query).dialect(HiveSqlDialect.DEFAULT).ok(expected);
+  }
+
+  @Test public void testHiveSelectQueryWithOrderByDescAndHighNullsWithVersionGreaterThanOrEq21() {
+    final HiveSqlDialect hive2_1Dialect =
+        new HiveSqlDialect(SqlDialect.EMPTY_CONTEXT
+            .withDatabaseMajorVersion(2)
+            .withDatabaseMinorVersion(1)
+            .withNullCollation(NullCollation.LOW));
+
+    final HiveSqlDialect hive2_2_Dialect =
+        new HiveSqlDialect(SqlDialect.EMPTY_CONTEXT
+            .withDatabaseMajorVersion(2)
+            .withDatabaseMinorVersion(2)
+            .withNullCollation(NullCollation.LOW));
+
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls first";
+    final String expected = "SELECT product_id\n"
+        + "FROM foodmart.product\n"
+        + "ORDER BY product_id DESC NULLS FIRST";
+    sql(query).dialect(hive2_1Dialect).ok(expected);
+    sql(query).dialect(hive2_2_Dialect).ok(expected);
+  }
+
+  @Test public void testHiveSelectQueryWithOrderByDescAndHighNullsWithVersion20() {
+    final HiveSqlDialect hive2_1_0_Dialect =
+        new HiveSqlDialect(SqlDialect.EMPTY_CONTEXT
+            .withDatabaseMajorVersion(2)
+            .withDatabaseMinorVersion(0)
+            .withNullCollation(NullCollation.LOW));
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls first";
+    final String expected = "SELECT product_id\n"
+        + "FROM foodmart.product\n"
+        + "ORDER BY product_id IS NULL DESC, product_id DESC";
+    sql(query).dialect(hive2_1_0_Dialect).ok(expected);
+  }
+
+  @Test public void testMySqlSelectQueryWithOrderByDescAndNullsFirstShouldBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls first";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` IS NULL DESC, `product_id` DESC";
+    sql(query).dialect(MysqlSqlDialect.DEFAULT).ok(expected);
+  }
+
+  @Test public void testMySqlSelectQueryWithOrderByAscAndNullsLastShouldBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls last";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` IS NULL, `product_id`";
+    sql(query).dialect(MysqlSqlDialect.DEFAULT).ok(expected);
+  }
+
+  @Test public void testMySqlSelectQueryWithOrderByAscNullsFirstShouldNotAddNullEmulation() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls first";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id`";
+    sql(query).dialect(MysqlSqlDialect.DEFAULT).ok(expected);
+  }
+
+  @Test public void testMySqlSelectQueryWithOrderByDescNullsLastShouldNotAddNullEmulation() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls last";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` DESC";
+    sql(query).dialect(MysqlSqlDialect.DEFAULT).ok(expected);
+  }
+
+  @Test public void testMySqlWithHighNullsSelectWithOrderByAscNullsLastAndNoEmulation() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls last";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id`";
+    sql(query).dialect(mySqlDialect(NullCollation.HIGH)).ok(expected);
+  }
+
+  @Test public void testMySqlWithHighNullsSelectWithOrderByAscNullsFirstAndNullEmulation() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls first";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` IS NULL DESC, `product_id`";
+    sql(query).dialect(mySqlDialect(NullCollation.HIGH)).ok(expected);
+  }
+
+  @Test public void testMySqlWithHighNullsSelectWithOrderByDescNullsFirstAndNoEmulation() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls first";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` DESC";
+    sql(query).dialect(mySqlDialect(NullCollation.HIGH)).ok(expected);
+  }
+
+  @Test public void testMySqlWithHighNullsSelectWithOrderByDescNullsLastAndNullEmulation() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls last";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` IS NULL, `product_id` DESC";
+    sql(query).dialect(mySqlDialect(NullCollation.HIGH)).ok(expected);
+  }
+
+  @Test public void testMySqlWithFirstNullsSelectWithOrderByDescAndNullsFirstShouldNotBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls first";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` DESC";
+    sql(query).dialect(mySqlDialect(NullCollation.FIRST)).ok(expected);
+  }
+
+  @Test public void testMySqlWithFirstNullsSelectWithOrderByAscAndNullsFirstShouldNotBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls first";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id`";
+    sql(query).dialect(mySqlDialect(NullCollation.FIRST)).ok(expected);
+  }
+
+  @Test public void testMySqlWithFirstNullsSelectWithOrderByDescAndNullsLastShouldBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls last";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` IS NULL, `product_id` DESC";
+    sql(query).dialect(mySqlDialect(NullCollation.FIRST)).ok(expected);
+  }
+
+  @Test public void testMySqlWithFirstNullsSelectWithOrderByAscAndNullsLastShouldBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls last";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` IS NULL, `product_id`";
+    sql(query).dialect(mySqlDialect(NullCollation.FIRST)).ok(expected);
+  }
+
+  @Test public void testMySqlWithLastNullsSelectWithOrderByDescAndNullsFirstShouldBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls first";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` IS NULL DESC, `product_id` DESC";
+    sql(query).dialect(mySqlDialect(NullCollation.LAST)).ok(expected);
+  }
+
+  @Test public void testMySqlWithLastNullsSelectWithOrderByAscAndNullsFirstShouldBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls first";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` IS NULL DESC, `product_id`";
+    sql(query).dialect(mySqlDialect(NullCollation.LAST)).ok(expected);
+  }
+
+  @Test public void testMySqlWithLastNullsSelectWithOrderByDescAndNullsLastShouldNotBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" desc nulls last";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id` DESC";
+    sql(query).dialect(mySqlDialect(NullCollation.LAST)).ok(expected);
+  }
+
+  @Test public void testMySqlWithLastNullsSelectWithOrderByAscAndNullsLastShouldNotBeEmulated() {
+    final String query = "select \"product_id\" from \"product\"\n"
+        + "order by \"product_id\" nulls last";
+    final String expected = "SELECT `product_id`\n"
+        + "FROM `foodmart`.`product`\n"
+        + "ORDER BY `product_id`";
+    sql(query).dialect(mySqlDialect(NullCollation.LAST)).ok(expected);
   }
 
   @Test public void testSelectQueryWithLimitClauseWithoutOrder() {
@@ -326,7 +592,7 @@ public class RelToSqlConverterTest {
         + "AND ? >= \"shelf_width\"";
     final String expected = "SELECT *\n"
         + "FROM \"foodmart\".\"product\"\n"
-        + "WHERE \"product_id\" = ?"
+        + "WHERE \"product_id\" = ? "
         + "AND ? >= \"shelf_width\"";
     sql(query).ok(expected);
   }
@@ -404,7 +670,7 @@ public class RelToSqlConverterTest {
         + "INNER JOIN (SELECT sales_fact_19970.customer_id\n"
         + "FROM foodmart.sales_fact_1997 AS sales_fact_19970) AS t0 ON t.customer_id = t0.customer_id";
 
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testCartesianProductWithCommaSyntax() {
@@ -459,7 +725,7 @@ public class RelToSqlConverterTest {
         + "FROM foodmart.employee AS employee\n"
         + "INNER JOIN foodmart.department AS department "
         + "ON employee.department_id = department.department_id";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectSelfJoinStar() {
@@ -470,7 +736,7 @@ public class RelToSqlConverterTest {
         + "FROM foodmart.employee AS employee\n"
         + "INNER JOIN foodmart.employee AS employee0 "
         + "ON employee.department_id = employee0.department_id";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectJoin() {
@@ -482,7 +748,7 @@ public class RelToSqlConverterTest {
         + "FROM foodmart.employee AS employee\n"
         + "INNER JOIN foodmart.department AS department "
         + "ON employee.department_id = department.department_id";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectSelfJoin() {
@@ -494,7 +760,7 @@ public class RelToSqlConverterTest {
         + "FROM foodmart.employee AS employee\n"
         + "INNER JOIN foodmart.employee AS employee0 "
         + "ON employee.department_id = employee0.department_id";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectWhere() {
@@ -503,7 +769,7 @@ public class RelToSqlConverterTest {
     final String expected = "SELECT employee.employee_id\n"
         + "FROM foodmart.employee AS employee\n"
         + "WHERE employee.department_id < 1000";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectJoinWhere() {
@@ -517,7 +783,7 @@ public class RelToSqlConverterTest {
         + "INNER JOIN foodmart.department AS department "
         + "ON employee.department_id = department.department_id\n"
         + "WHERE employee.employee_id < 1000";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectSelfJoinWhere() {
@@ -531,7 +797,7 @@ public class RelToSqlConverterTest {
         + "INNER JOIN foodmart.employee AS employee0 "
         + "ON employee.department_id = employee0.department_id\n"
         + "WHERE employee0.employee_id < 2000";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectCast() {
@@ -540,7 +806,7 @@ public class RelToSqlConverterTest {
     final String expected = "SELECT reserve_employee.hire_date, "
         + "CAST(reserve_employee.hire_date AS VARCHAR(10))\n"
         + "FROM foodmart.reserve_employee AS reserve_employee";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectSelectQueryWithGroupByHaving() {
@@ -551,7 +817,7 @@ public class RelToSqlConverterTest {
         + "FROM foodmart.product AS product\n"
         + "GROUP BY product.product_class_id, product.product_id\n"
         + "HAVING product.product_id > 10";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
 
@@ -565,7 +831,7 @@ public class RelToSqlConverterTest {
         + "WHERE product.cases_per_pallet > 100\n"
         + "GROUP BY product.product_id, product.units_per_case\n"
         + "ORDER BY product.units_per_case DESC";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   @Test public void testDb2DialectSelectQueryWithGroup() {
@@ -581,7 +847,7 @@ public class RelToSqlConverterTest {
         + "AND (reserve_employee.position_title = 'SDE' OR "
         + "reserve_employee.position_title = 'SDM')\n"
         + "GROUP BY reserve_employee.store_id, reserve_employee.position_title";
-    sql(query).dialect(DatabaseProduct.DB2.getDialect()).ok(expected);
+    sql(query).withDb2().ok(expected);
   }
 
   /** Test case for
@@ -604,7 +870,7 @@ public class RelToSqlConverterTest {
     sql(sql)
         .schema(CalciteAssert.SchemaSpec.JDBC_SCOTT)
         .ok(expected)
-        .dialect(DatabaseProduct.DB2.getDialect())
+        .withDb2()
         .ok(expected2);
   }
 
@@ -690,22 +956,67 @@ public class RelToSqlConverterTest {
 
   @Test public void testLiteral() {
     checkLiteral("DATE '1978-05-02'");
+    checkLiteral2("DATE '1978-5-2'", "DATE '1978-05-02'");
     checkLiteral("TIME '12:34:56'");
     checkLiteral("TIME '12:34:56.78'");
+    checkLiteral2("TIME '1:4:6.080'", "TIME '01:04:06.080'");
     checkLiteral("TIMESTAMP '1978-05-02 12:34:56.78'");
+    checkLiteral2("TIMESTAMP '1978-5-2 2:4:6.80'",
+        "TIMESTAMP '1978-05-02 02:04:06.80'");
     checkLiteral("'I can''t explain'");
     checkLiteral("''");
     checkLiteral("TRUE");
     checkLiteral("123");
     checkLiteral("123.45");
     checkLiteral("-123.45");
+    checkLiteral("INTERVAL '1-2' YEAR TO MONTH");
+    checkLiteral("INTERVAL -'1-2' YEAR TO MONTH");
+    checkLiteral("INTERVAL '12-11' YEAR TO MONTH");
+    checkLiteral("INTERVAL '1' YEAR");
+    checkLiteral("INTERVAL '1' MONTH");
+    checkLiteral("INTERVAL '12' DAY");
+    checkLiteral("INTERVAL -'12' DAY");
+    checkLiteral2("INTERVAL '1 2' DAY TO HOUR",
+        "INTERVAL '1 02' DAY TO HOUR");
+    checkLiteral2("INTERVAL '1 2:10' DAY TO MINUTE",
+        "INTERVAL '1 02:10' DAY TO MINUTE");
+    checkLiteral2("INTERVAL '1 2:00' DAY TO MINUTE",
+        "INTERVAL '1 02:00' DAY TO MINUTE");
+    checkLiteral2("INTERVAL '1 2:34:56' DAY TO SECOND",
+        "INTERVAL '1 02:34:56' DAY TO SECOND");
+    checkLiteral2("INTERVAL '1 2:34:56.789' DAY TO SECOND",
+        "INTERVAL '1 02:34:56.789' DAY TO SECOND");
+    checkLiteral2("INTERVAL '1 2:34:56.78' DAY TO SECOND",
+        "INTERVAL '1 02:34:56.78' DAY TO SECOND");
+    checkLiteral2("INTERVAL '1 2:34:56.078' DAY TO SECOND",
+        "INTERVAL '1 02:34:56.078' DAY TO SECOND");
+    checkLiteral2("INTERVAL -'1 2:34:56.078' DAY TO SECOND",
+        "INTERVAL -'1 02:34:56.078' DAY TO SECOND");
+    checkLiteral2("INTERVAL '1 2:3:5.070' DAY TO SECOND",
+        "INTERVAL '1 02:03:05.07' DAY TO SECOND");
+    checkLiteral("INTERVAL '1:23' HOUR TO MINUTE");
+    checkLiteral("INTERVAL '1:02' HOUR TO MINUTE");
+    checkLiteral("INTERVAL -'1:02' HOUR TO MINUTE");
+    checkLiteral("INTERVAL '1:23:45' HOUR TO SECOND");
+    checkLiteral("INTERVAL '1:03:05' HOUR TO SECOND");
+    checkLiteral("INTERVAL '1:23:45.678' HOUR TO SECOND");
+    checkLiteral("INTERVAL '1:03:05.06' HOUR TO SECOND");
+    checkLiteral("INTERVAL '12' MINUTE");
+    checkLiteral("INTERVAL '12:34' MINUTE TO SECOND");
+    checkLiteral("INTERVAL '12:34.567' MINUTE TO SECOND");
+    checkLiteral("INTERVAL '12' SECOND");
+    checkLiteral("INTERVAL '12.345' SECOND");
   }
 
-  private void checkLiteral(String s) {
-    sql("VALUES " + s)
-        .dialect(DatabaseProduct.HSQLDB.getDialect())
+  private void checkLiteral(String expression) {
+    checkLiteral2(expression, expression);
+  }
+
+  private void checkLiteral2(String expression, String expected) {
+    sql("VALUES " + expression)
+        .withHsqldb()
         .ok("SELECT *\n"
-            + "FROM (VALUES  (" + s + "))");
+            + "FROM (VALUES  (" + expected + ")) AS t (EXPR$0)");
   }
 
   /** Test case for
@@ -715,7 +1026,7 @@ public class RelToSqlConverterTest {
     String query = "SELECT floor(\"hire_date\" TO MINUTE) FROM \"employee\"";
     String expected = "SELECT TRUNC(hire_date, 'MI')\nFROM foodmart.employee";
     sql(query)
-        .dialect(DatabaseProduct.HSQLDB.getDialect())
+        .withHsqldb()
         .ok(expected);
   }
 
@@ -723,7 +1034,7 @@ public class RelToSqlConverterTest {
     String query = "SELECT floor(\"hire_date\" TO MINUTE) FROM \"employee\"";
     String expected = "SELECT DATE_TRUNC('MINUTE', \"hire_date\")\nFROM \"foodmart\".\"employee\"";
     sql(query)
-        .dialect(DatabaseProduct.POSTGRESQL.getDialect())
+        .withPostgresql()
         .ok(expected);
   }
 
@@ -731,7 +1042,7 @@ public class RelToSqlConverterTest {
     String query = "SELECT floor(\"hire_date\" TO MINUTE) FROM \"employee\"";
     String expected = "SELECT TRUNC(\"hire_date\", 'MINUTE')\nFROM \"foodmart\".\"employee\"";
     sql(query)
-        .dialect(DatabaseProduct.ORACLE.getDialect())
+        .withOracle()
         .ok(expected);
   }
 
@@ -741,7 +1052,7 @@ public class RelToSqlConverterTest {
         + "DATEADD(day, - (6 + DATEPART(weekday, [hire_date] )) % 7, [hire_date] ), 126))\n"
         + "FROM [foodmart].[employee]";
     sql(query)
-        .dialect(DatabaseProduct.MSSQL.getDialect())
+        .withMssql()
         .ok(expected);
   }
 
@@ -750,7 +1061,7 @@ public class RelToSqlConverterTest {
     String expected = "SELECT CONVERT(DATETIME, CONVERT(VARCHAR(7), [hire_date] , 126)+'-01')\n"
         + "FROM [foodmart].[employee]";
     sql(query)
-        .dialect(DatabaseProduct.MSSQL.getDialect())
+        .withMssql()
         .ok(expected);
   }
 
@@ -759,7 +1070,7 @@ public class RelToSqlConverterTest {
     String expected = "SELECT DATE_FORMAT(`hire_date`, '%Y-%m-01')\n"
         + "FROM `foodmart`.`employee`";
     sql(query)
-        .dialect(DatabaseProduct.MYSQL.getDialect())
+        .withMysql()
         .ok(expected);
   }
 
@@ -768,7 +1079,7 @@ public class RelToSqlConverterTest {
     String expected = "SELECT STR_TO_DATE(DATE_FORMAT(`hire_date` , '%x%v-1'), '%x%v-%w')\n"
         + "FROM `foodmart`.`employee`";
     sql(query)
-        .dialect(DatabaseProduct.MYSQL.getDialect())
+        .withMysql()
         .ok(expected);
   }
 
@@ -793,13 +1104,13 @@ public class RelToSqlConverterTest {
         + "FROM `foodmart`.`employee`\n"
         + "GROUP BY DATE_FORMAT(`hire_date`, '%Y-%m-%d %k:%i:00')";
     sql(query)
-        .dialect(DatabaseProduct.HSQLDB.getDialect())
+        .withHsqldb()
         .ok(expected)
-        .dialect(DatabaseProduct.ORACLE.getDialect())
+        .withOracle()
         .ok(expectedOracle)
-        .dialect(DatabaseProduct.POSTGRESQL.getDialect())
+        .withPostgresql()
         .ok(expectedPostgresql)
-        .dialect(DatabaseProduct.MYSQL.getDialect())
+        .withMysql()
         .ok(expectedMysql);
   }
 
@@ -813,13 +1124,13 @@ public class RelToSqlConverterTest {
     final String expectedMysql = "SELECT SUBSTRING(`brand_name` FROM 2)\n"
         + "FROM `foodmart`.`product`";
     sql(query)
-        .dialect(DatabaseProduct.ORACLE.getDialect())
+        .withOracle()
         .ok(expectedOracle)
-        .dialect(DatabaseProduct.POSTGRESQL.getDialect())
+        .withPostgresql()
         .ok(expectedPostgresql)
-        .dialect(DatabaseProduct.MYSQL.getDialect())
+        .withMysql()
         .ok(expectedMysql)
-        .dialect(DatabaseProduct.MSSQL.getDialect())
+        .withMssql()
         // mssql does not support this syntax and so should fail
         .throws_("MSSQL SUBSTRING requires FROM and FOR arguments");
   }
@@ -836,13 +1147,13 @@ public class RelToSqlConverterTest {
     final String expectedMssql = "SELECT SUBSTRING([brand_name], 2, 3)\n"
         + "FROM [foodmart].[product]";
     sql(query)
-        .dialect(DatabaseProduct.ORACLE.getDialect())
+        .withOracle()
         .ok(expectedOracle)
-        .dialect(DatabaseProduct.POSTGRESQL.getDialect())
+        .withPostgresql()
         .ok(expectedPostgresql)
-        .dialect(DatabaseProduct.MYSQL.getDialect())
+        .withMysql()
         .ok(expectedMysql)
-        .dialect(DatabaseProduct.MSSQL.getDialect())
+        .withMssql()
         .ok(expectedMssql);
   }
 
@@ -948,9 +1259,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -971,9 +1282,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" + $)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -994,9 +1305,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (^ \"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1017,9 +1328,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (^ \"STRT\" \"DOWN\" + \"UP\" + $)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1040,9 +1351,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" * \"UP\" ?)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1063,9 +1374,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" {- \"DOWN\" -} \"UP\" ?)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1086,9 +1397,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" { 2 } \"UP\" { 3, })\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1109,9 +1420,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" { , 2 } \"UP\" { 3, 5 })\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1132,9 +1443,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" {- \"DOWN\" + -} {- \"UP\" * -})\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1158,9 +1469,9 @@ public class RelToSqlConverterTest {
         + "(\"A\" \"B\" \"C\" | \"A\" \"C\" \"B\" | \"B\" \"A\" \"C\" "
         + "| \"B\" \"C\" \"A\" | \"C\" \"A\" \"B\" | \"C\" \"B\" \"A\")\n"
         + "DEFINE "
-        + "\"A\" AS \"A\".\"net_weight\" < PREV(\"A\".\"net_weight\", 1), "
-        + "\"B\" AS \"B\".\"net_weight\" > PREV(\"B\".\"net_weight\", 1), "
-        + "\"C\" AS \"C\".\"net_weight\" < PREV(\"C\".\"net_weight\", 1))";
+        + "\"A\" AS PREV(\"A\".\"net_weight\", 0) < PREV(\"A\".\"net_weight\", 1), "
+        + "\"B\" AS PREV(\"B\".\"net_weight\", 0) > PREV(\"B\".\"net_weight\", 1), "
+        + "\"C\" AS PREV(\"C\".\"net_weight\", 0) < PREV(\"C\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
 
@@ -1180,9 +1491,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1203,9 +1514,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))\n"
         + "ORDER BY \"net_weight\"";
     sql(sql).ok(expected);
@@ -1244,9 +1555,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))\n"
         + "ORDER BY \"net_weight\"";
     sql(sql).ok(expected);
@@ -1268,10 +1579,10 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "NEXT(\"UP\".\"net_weight\", 1))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "NEXT(PREV(\"UP\".\"net_weight\", 0), 1))";
     sql(sql).ok(expected);
   }
 
@@ -1291,9 +1602,9 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "FIRST(\"DOWN\".\"net_weight\", 0), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "LAST(\"UP\".\"net_weight\", 0))";
     sql(sql).ok(expected);
   }
@@ -1314,10 +1625,10 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "LAST(\"UP\".\"net_weight\" + \"UP\".\"gross_weight\", 0))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "LAST(\"UP\".\"net_weight\", 0) + LAST(\"UP\".\"gross_weight\", 0))";
     sql(sql).ok(expected);
   }
 
@@ -1338,11 +1649,11 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "PREV(LAST(\"UP\".\"net_weight\" + "
-        + "\"UP\".\"gross_weight\", 0), 3))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "PREV(LAST(\"UP\".\"net_weight\", 0) + "
+        + "LAST(\"UP\".\"gross_weight\", 0), 3))";
     sql(sql).ok(expected);
   }
 
@@ -1366,18 +1677,18 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "MATCH_NUMBER () AS \"MATCH_NUM\", "
-        + "CLASSIFIER() AS \"VAR_MATCH\", "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
-        + "LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
-        + "LAST(\"UP\".\"net_weight\", 0) AS \"END_NW\"\n"
+        + "FINAL MATCH_NUMBER () AS \"MATCH_NUM\", "
+        + "FINAL CLASSIFIER() AS \"VAR_MATCH\", "
+        + "FINAL \"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "FINAL LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
+        + "FINAL LAST(\"UP\".\"net_weight\", 0) AS \"END_NW\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1400,16 +1711,16 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "FINAL \"STRT\".\"net_weight\" AS \"START_NW\", "
         + "FINAL LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
-        + "LAST(\"UP\".\"net_weight\", 0) AS \"END_NW\"\n"
+        + "FINAL LAST(\"UP\".\"net_weight\", 0) AS \"END_NW\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1432,16 +1743,16 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
-        + "RUNNING LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
-        + "LAST(\"UP\".\"net_weight\", 0) AS \"END_NW\"\n"
+        + "FINAL \"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "FINAL (RUNNING LAST(\"DOWN\".\"net_weight\", 0)) AS \"BOTTOM_NW\", "
+        + "FINAL LAST(\"UP\".\"net_weight\", 0) AS \"END_NW\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1464,17 +1775,17 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "FINAL \"STRT\".\"net_weight\" AS \"START_NW\", "
         + "FINAL COUNT(\"UP\".\"net_weight\") AS \"UP_CNT\", "
         + "FINAL COUNT(\"*\".\"net_weight\") AS \"DOWN_CNT\", "
-        + "RUNNING COUNT(\"*\".\"net_weight\") AS \"RUNNING_CNT\"\n"
+        + "FINAL (RUNNING COUNT(\"*\".\"net_weight\")) AS \"RUNNING_CNT\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1498,17 +1809,17 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "FIRST(\"STRT\".\"net_weight\", 0) AS \"START_NW\", "
-        + "LAST(\"UP\".\"net_weight\", 0) AS \"UP_CNT\", "
-        + "SUM(\"DOWN\".\"net_weight\") / "
-        + "COUNT(\"DOWN\".\"net_weight\") AS \"DOWN_CNT\"\n"
+        + "FINAL FIRST(\"STRT\".\"net_weight\", 0) AS \"START_NW\", "
+        + "FINAL LAST(\"UP\".\"net_weight\", 0) AS \"UP_CNT\", "
+        + "FINAL (SUM(\"DOWN\".\"net_weight\") / "
+        + "COUNT(\"DOWN\".\"net_weight\")) AS \"DOWN_CNT\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1531,17 +1842,17 @@ public class RelToSqlConverterTest {
         + "FROM (SELECT *\n"
         + "FROM \"foodmart\".\"product\") MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "FIRST(\"STRT\".\"net_weight\", 0) AS \"START_NW\", "
-        + "LAST(\"DOWN\".\"net_weight\", 0) AS \"UP_CNT\", "
+        + "FINAL FIRST(\"STRT\".\"net_weight\", 0) AS \"START_NW\", "
+        + "FINAL LAST(\"DOWN\".\"net_weight\", 0) AS \"UP_CNT\", "
         + "FINAL SUM(\"DOWN\".\"net_weight\") AS \"DOWN_CNT\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN "
         + "(\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1564,17 +1875,17 @@ public class RelToSqlConverterTest {
         + "FROM (SELECT *\n"
         + "FROM \"foodmart\".\"product\") MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "FIRST(\"STRT\".\"net_weight\", 0) AS \"START_NW\", "
-        + "LAST(\"DOWN\".\"net_weight\", 0) AS \"UP_CNT\", "
+        + "FINAL FIRST(\"STRT\".\"net_weight\", 0) AS \"START_NW\", "
+        + "FINAL LAST(\"DOWN\".\"net_weight\", 0) AS \"UP_CNT\", "
         + "FINAL SUM(\"DOWN\".\"net_weight\") AS \"DOWN_CNT\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN "
         + "(\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))\n"
         + "ORDER BY \"START_NW\", \"UP_CNT\"";
     sql(sql).ok(expected);
@@ -1597,10 +1908,10 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "NEXT(\"UP\".\"net_weight\", 1))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "NEXT(PREV(\"UP\".\"net_weight\", 0), 1))";
     sql(sql).ok(expected);
   }
 
@@ -1621,10 +1932,10 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP PAST LAST ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "NEXT(\"UP\".\"net_weight\", 1))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "NEXT(PREV(\"UP\".\"net_weight\", 0), 1))";
     sql(sql).ok(expected);
   }
 
@@ -1644,10 +1955,10 @@ public class RelToSqlConverterTest {
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO FIRST \"DOWN\"\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
-        + "DEFINE \"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "DEFINE \"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "NEXT(\"UP\".\"net_weight\", 1))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "NEXT(PREV(\"UP\".\"net_weight\", 0), 1))";
     sql(sql).ok(expected);
   }
 
@@ -1668,10 +1979,10 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO LAST \"DOWN\"\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "NEXT(\"UP\".\"net_weight\", 1))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "NEXT(PREV(\"UP\".\"net_weight\", 0), 1))";
     sql(sql).ok(expected);
   }
 
@@ -1692,10 +2003,10 @@ public class RelToSqlConverterTest {
         + "AFTER MATCH SKIP TO LAST \"DOWN\"\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "NEXT(\"UP\".\"net_weight\", 1))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "NEXT(PREV(\"UP\".\"net_weight\", 0), 1))";
     sql(sql).ok(expected);
   }
 
@@ -1718,10 +2029,10 @@ public class RelToSqlConverterTest {
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "SUBSET \"STDN\" = (\"DOWN\", \"STRT\")\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
-        + "NEXT(\"UP\".\"net_weight\", 1))";
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
+        + "NEXT(PREV(\"UP\".\"net_weight\", 0), 1))";
     sql(sql).ok(expected);
   }
 
@@ -1744,18 +2055,18 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
-        + "LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
-        + "SUM(\"STDN\".\"net_weight\") / "
-        + "COUNT(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
+        + "FINAL \"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "FINAL LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
+        + "FINAL (SUM(\"STDN\".\"net_weight\") / "
+        + "COUNT(\"STDN\".\"net_weight\")) AS \"AVG_STDN\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "SUBSET \"STDN\" = (\"DOWN\", \"STRT\")\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1779,17 +2090,17 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
-        + "LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
-        + "SUM(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
+        + "FINAL \"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "FINAL LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
+        + "FINAL SUM(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "SUBSET \"STDN\" = (\"DOWN\", \"STRT\")\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1813,17 +2124,17 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
-        + "LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
-        + "SUM(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
+        + "FINAL \"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "FINAL LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
+        + "FINAL SUM(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "SUBSET \"STDN\" = (\"DOWN\", \"STRT\"), \"STDN2\" = (\"DOWN\", \"STRT\")\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1848,17 +2159,17 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
-        + "LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
-        + "SUM(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
+        + "FINAL \"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "FINAL LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
+        + "FINAL SUM(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
         + "ONE ROW PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "SUBSET \"STDN\" = (\"DOWN\", \"STRT\"), \"STDN2\" = (\"DOWN\", \"STRT\")\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
   }
@@ -1883,19 +2194,71 @@ public class RelToSqlConverterTest {
         + "FROM \"foodmart\".\"product\") "
         + "MATCH_RECOGNIZE(\n"
         + "MEASURES "
-        + "\"STRT\".\"net_weight\" AS \"START_NW\", "
-        + "LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
-        + "SUM(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
+        + "RUNNING \"STRT\".\"net_weight\" AS \"START_NW\", "
+        + "RUNNING LAST(\"DOWN\".\"net_weight\", 0) AS \"BOTTOM_NW\", "
+        + "RUNNING SUM(\"STDN\".\"net_weight\") AS \"AVG_STDN\"\n"
         + "ALL ROWS PER MATCH\n"
         + "AFTER MATCH SKIP TO NEXT ROW\n"
         + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +)\n"
         + "SUBSET \"STDN\" = (\"DOWN\", \"STRT\"), \"STDN2\" = (\"DOWN\", \"STRT\")\n"
         + "DEFINE "
-        + "\"DOWN\" AS \"DOWN\".\"net_weight\" < "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"net_weight\", 0) < "
         + "PREV(\"DOWN\".\"net_weight\", 1), "
-        + "\"UP\" AS \"UP\".\"net_weight\" > "
+        + "\"UP\" AS PREV(\"UP\".\"net_weight\", 0) > "
         + "PREV(\"UP\".\"net_weight\", 1))";
     sql(sql).ok(expected);
+  }
+
+  @Test public void testMatchRecognizeWithin() {
+    final String sql = "select *\n"
+        + "  from \"employee\" match_recognize\n"
+        + "  (\n"
+        + "   order by \"hire_date\"\n"
+        + "   ALL ROWS PER MATCH\n"
+        + "   pattern (strt down+ up+) within interval '3:12:22.123' hour to second\n"
+        + "   define\n"
+        + "     down as down.\"salary\" < PREV(down.\"salary\"),\n"
+        + "     up as up.\"salary\" > prev(up.\"salary\")\n"
+        + "  ) mr";
+
+    final String expected = "SELECT *\n"
+        + "FROM (SELECT *\n"
+        + "FROM \"foodmart\".\"employee\") "
+        + "MATCH_RECOGNIZE(\n"
+        + "ORDER BY \"hire_date\"\n"
+        + "ALL ROWS PER MATCH\n"
+        + "AFTER MATCH SKIP TO NEXT ROW\n"
+        + "PATTERN (\"STRT\" \"DOWN\" + \"UP\" +) WITHIN INTERVAL '3:12:22.123' HOUR TO SECOND\n"
+        + "DEFINE "
+        + "\"DOWN\" AS PREV(\"DOWN\".\"salary\", 0) < "
+        + "PREV(\"DOWN\".\"salary\", 1), "
+        + "\"UP\" AS PREV(\"UP\".\"salary\", 0) > "
+        + "PREV(\"UP\".\"salary\", 1))";
+    sql(sql).ok(expected);
+  }
+
+  @Test public void testValues() {
+    final String sql = "select \"a\"\n"
+        + "from (values (1, 'x'), (2, 'yy')) as t(\"a\", \"b\")";
+    final String expectedHsqldb = "SELECT a\n"
+        + "FROM (VALUES  (1, 'x '),\n"
+        + " (2, 'yy')) AS t (a, b)";
+    final String expectedPostgresql = "SELECT \"a\"\n"
+        + "FROM (VALUES  (1, 'x '),\n"
+        + " (2, 'yy')) AS \"t\" (\"a\", \"b\")";
+    final String expectedOracle = "SELECT \"a\"\n"
+        + "FROM (SELECT 1 \"a\", 'x ' \"b\"\n"
+        + "FROM \"DUAL\"\n"
+        + "UNION ALL\n"
+        + "SELECT 2 \"a\", 'yy' \"b\"\n"
+        + "FROM \"DUAL\")";
+    sql(sql)
+        .withHsqldb()
+        .ok(expectedHsqldb)
+        .withPostgresql()
+        .ok(expectedPostgresql)
+        .withOracle()
+        .ok(expectedOracle);
   }
 
   /** Fluid interface to run tests. */
@@ -1918,6 +2281,38 @@ public class RelToSqlConverterTest {
 
     Sql dialect(SqlDialect dialect) {
       return new Sql(schemaSpec, sql, dialect, config, transforms);
+    }
+
+    Sql withDb2() {
+      return dialect(SqlDialect.DatabaseProduct.DB2.getDialect());
+    }
+
+    Sql withHive() {
+      return dialect(SqlDialect.DatabaseProduct.HIVE.getDialect());
+    }
+
+    Sql withHsqldb() {
+      return dialect(SqlDialect.DatabaseProduct.HSQLDB.getDialect());
+    }
+
+    Sql withMssql() {
+      return dialect(SqlDialect.DatabaseProduct.MSSQL.getDialect());
+    }
+
+    Sql withMysql() {
+      return dialect(SqlDialect.DatabaseProduct.MYSQL.getDialect());
+    }
+
+    Sql withOracle() {
+      return dialect(SqlDialect.DatabaseProduct.ORACLE.getDialect());
+    }
+
+    Sql withPostgresql() {
+      return dialect(SqlDialect.DatabaseProduct.POSTGRESQL.getDialect());
+    }
+
+    Sql withVertica() {
+      return dialect(SqlDialect.DatabaseProduct.VERTICA.getDialect());
     }
 
     Sql config(SqlToRelConverter.Config config) {

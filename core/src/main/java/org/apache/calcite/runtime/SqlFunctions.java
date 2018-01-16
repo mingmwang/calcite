@@ -33,6 +33,8 @@ import org.apache.calcite.linq4j.tree.Primitive;
 import org.apache.calcite.runtime.FlatLists.ComparableList;
 import org.apache.calcite.util.Bug;
 import org.apache.calcite.util.NumberUtil;
+import org.apache.calcite.util.TimeWithTimeZoneString;
+import org.apache.calcite.util.TimestampWithTimeZoneString;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -72,16 +74,14 @@ public class SqlFunctions {
 
   private static final TimeZone LOCAL_TZ = TimeZone.getDefault();
 
-  private static final Function1<List<Object>, Enumerable<Object>>
-  LIST_AS_ENUMERABLE =
+  private static final Function1<List<Object>, Enumerable<Object>> LIST_AS_ENUMERABLE =
       new Function1<List<Object>, Enumerable<Object>>() {
         public Enumerable<Object> apply(List<Object> list) {
           return Linq4j.asEnumerable(list);
         }
       };
 
-  private static final Function1<Object[], Enumerable<Object[]>>
-  ARRAY_CARTESIAN_PRODUCT =
+  private static final Function1<Object[], Enumerable<Object[]>> ARRAY_CARTESIAN_PRODUCT =
       new Function1<Object[], Enumerable<Object[]>>() {
         public Enumerable<Object[]> apply(Object[] lists) {
           final List<Enumerator<Object>> enumerators = new ArrayList<>();
@@ -823,6 +823,10 @@ public class SqlFunctions {
   /** SQL <code>POWER</code> operator applied to double values. */
   public static double power(double b0, double b1) {
     return Math.pow(b0, b1);
+  }
+
+  public static double power(double b0, BigDecimal b1) {
+    return Math.pow(b0, b1.doubleValue());
   }
 
   public static double power(long b0, long b1) {
@@ -1693,6 +1697,50 @@ public class SqlFunctions {
     return v == null ? null : internalToTime(v.intValue());
   }
 
+  public static Integer toTimeWithLocalTimeZone(String v) {
+    return v == null ? null : new TimeWithTimeZoneString(v)
+        .withTimeZone(DateTimeUtils.UTC_ZONE)
+        .getLocalTimeString()
+        .getMillisOfDay();
+  }
+
+  public static Integer toTimeWithLocalTimeZone(String v, TimeZone timeZone) {
+    return v == null ? null : new TimeWithTimeZoneString(v + " " + timeZone.getID())
+        .withTimeZone(DateTimeUtils.UTC_ZONE)
+        .getLocalTimeString()
+        .getMillisOfDay();
+  }
+
+  public static int timeWithLocalTimeZoneToTime(int v, TimeZone timeZone) {
+    return TimeWithTimeZoneString.fromMillisOfDay(v)
+        .withTimeZone(timeZone)
+        .getLocalTimeString()
+        .getMillisOfDay();
+  }
+
+  public static long timeWithLocalTimeZoneToTimestamp(String date, int v, TimeZone timeZone) {
+    final TimeWithTimeZoneString tTZ = TimeWithTimeZoneString.fromMillisOfDay(v)
+        .withTimeZone(DateTimeUtils.UTC_ZONE);
+    return new TimestampWithTimeZoneString(date + " " + tTZ.toString())
+        .withTimeZone(timeZone)
+        .getLocalTimestampString()
+        .getMillisSinceEpoch();
+  }
+
+  public static long timeWithLocalTimeZoneToTimestampWithLocalTimeZone(String date, int v) {
+    final TimeWithTimeZoneString tTZ = TimeWithTimeZoneString.fromMillisOfDay(v)
+        .withTimeZone(DateTimeUtils.UTC_ZONE);
+    return new TimestampWithTimeZoneString(date + " " + tTZ.toString())
+        .getLocalTimestampString()
+        .getMillisSinceEpoch();
+  }
+
+  public static String timeWithLocalTimeZoneToString(int v, TimeZone timeZone) {
+    return TimeWithTimeZoneString.fromMillisOfDay(v)
+        .withTimeZone(timeZone)
+        .toString();
+  }
+
   /** Converts the internal representation of a SQL TIMESTAMP (long) to the Java
    * type used for UDF parameters ({@link java.sql.Timestamp}). */
   public static java.sql.Timestamp internalToTimestamp(long v) {
@@ -1701,6 +1749,53 @@ public class SqlFunctions {
 
   public static java.sql.Timestamp internalToTimestamp(Long v) {
     return v == null ? null : internalToTimestamp(v.longValue());
+  }
+
+  public static int timestampWithLocalTimeZoneToDate(long v, TimeZone timeZone) {
+    return TimestampWithTimeZoneString.fromMillisSinceEpoch(v)
+        .withTimeZone(timeZone)
+        .getLocalDateString()
+        .getDaysSinceEpoch();
+  }
+
+  public static int timestampWithLocalTimeZoneToTime(long v, TimeZone timeZone) {
+    return TimestampWithTimeZoneString.fromMillisSinceEpoch(v)
+        .withTimeZone(timeZone)
+        .getLocalTimeString()
+        .getMillisOfDay();
+  }
+
+  public static long timestampWithLocalTimeZoneToTimestamp(long v, TimeZone timeZone) {
+    return TimestampWithTimeZoneString.fromMillisSinceEpoch(v)
+        .withTimeZone(timeZone)
+        .getLocalTimestampString()
+        .getMillisSinceEpoch();
+  }
+
+  public static String timestampWithLocalTimeZoneToString(long v, TimeZone timeZone) {
+    return TimestampWithTimeZoneString.fromMillisSinceEpoch(v)
+        .withTimeZone(timeZone)
+        .toString();
+  }
+
+  public static int timestampWithLocalTimeZoneToTimeWithLocalTimeZone(long v) {
+    return TimestampWithTimeZoneString.fromMillisSinceEpoch(v)
+        .getLocalTimeString()
+        .getMillisOfDay();
+  }
+
+  public static Long toTimestampWithLocalTimeZone(String v) {
+    return v == null ? null : new TimestampWithTimeZoneString(v)
+        .withTimeZone(DateTimeUtils.UTC_ZONE)
+        .getLocalTimestampString()
+        .getMillisSinceEpoch();
+  }
+
+  public static Long toTimestampWithLocalTimeZone(String v, TimeZone timeZone) {
+    return v == null ? null : new TimestampWithTimeZoneString(v + " " + timeZone.getID())
+        .withTimeZone(DateTimeUtils.UTC_ZONE)
+        .getLocalTimestampString()
+        .getMillisSinceEpoch();
   }
 
   // Don't need shortValueOf etc. - Short.valueOf is sufficient.
@@ -1865,6 +1960,11 @@ public class SqlFunctions {
     return (int) (localTimestamp(root) % DateTimeUtils.MILLIS_PER_DAY);
   }
 
+  @NonDeterministic
+  public static TimeZone timeZone(DataContext root) {
+    return (TimeZone) DataContext.Variable.TIME_ZONE.get(root);
+  }
+
   /** SQL {@code TRANSLATE(string, search_chars, replacement_chars)}
    * function. */
   public static String translate3(String s, String search, String replacement) {
@@ -2005,8 +2105,8 @@ public class SqlFunctions {
     }
   }
 
-  public static Function1<Object, Enumerable<ComparableList<Comparable>>>
-  flatProduct(final int[] fieldCounts, final boolean withOrdinality,
+  public static Function1<Object, Enumerable<ComparableList<Comparable>>> flatProduct(
+      final int[] fieldCounts, final boolean withOrdinality,
       final FlatProductInputType[] inputTypes) {
     if (fieldCounts.length == 1) {
       if (!withOrdinality && inputTypes[0] == FlatProductInputType.SCALAR) {
@@ -2029,8 +2129,8 @@ public class SqlFunctions {
     };
   }
 
-  private static Enumerable<FlatLists.ComparableList<Comparable>>
-  p2(Object[] lists, int[] fieldCounts, boolean withOrdinality,
+  private static Enumerable<FlatLists.ComparableList<Comparable>> p2(
+      Object[] lists, int[] fieldCounts, boolean withOrdinality,
       FlatProductInputType[] inputTypes) {
     final List<Enumerator<List<Comparable>>> enumerators = new ArrayList<>();
     int totalFieldCount = 0;
@@ -2063,11 +2163,11 @@ public class SqlFunctions {
             Linq4j.enumerator(map.entrySet());
 
         Enumerator<List<Comparable>> transformed = Linq4j.transform(enumerator,
-          new Function1<Entry<Comparable, Comparable>, List<Comparable>>() {
-            public List<Comparable> apply(Entry<Comparable, Comparable> entry) {
-              return FlatLists.<Comparable>of(entry.getKey(), entry.getValue());
-            }
-          });
+            new Function1<Entry<Comparable, Comparable>, List<Comparable>>() {
+              public List<Comparable> apply(Entry<Comparable, Comparable> e) {
+                return FlatLists.of(e.getKey(), e.getValue());
+              }
+            });
         enumerators.add(transformed);
         break;
       default:
@@ -2091,9 +2191,8 @@ public class SqlFunctions {
 
   /** Similar to {@link Linq4j#product(Iterable)} but each resulting list
    * implements {@link FlatLists.ComparableList}. */
-  public static <E extends Comparable>
-  Enumerable<FlatLists.ComparableList<E>>
-  product(final List<Enumerator<List<E>>> enumerators, final int fieldCount,
+  public static <E extends Comparable> Enumerable<FlatLists.ComparableList<E>> product(
+      final List<Enumerator<List<E>>> enumerators, final int fieldCount,
       final boolean withOrdinality) {
     return new AbstractEnumerable<FlatLists.ComparableList<E>>() {
       public Enumerator<FlatLists.ComparableList<E>> enumerator() {
@@ -2187,7 +2286,9 @@ public class SqlFunctions {
   }
 
   /** Enumerates over the cartesian product of the given lists, returning
-   * a comparable list for each row. */
+   * a comparable list for each row.
+   *
+   * @param <E> element type */
   private static class ProductComparableListEnumerator<E extends Comparable>
       extends CartesianProductEnumerator<List<E>, FlatLists.ComparableList<E>> {
     final E[] flatElements;

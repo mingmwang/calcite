@@ -26,7 +26,6 @@ import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlCallBinding;
 import org.apache.calcite.sql.SqlDataTypeSpec;
-import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlJdbcFunctionCall;
 import org.apache.calcite.sql.SqlLiteral;
@@ -34,6 +33,8 @@ import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlNodeList;
 import org.apache.calcite.sql.SqlOperandCountRange;
 import org.apache.calcite.sql.SqlOperator;
+import org.apache.calcite.sql.dialect.AnsiSqlDialect;
+import org.apache.calcite.sql.dialect.CalciteSqlDialect;
 import org.apache.calcite.sql.fun.OracleSqlOperatorTable;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParserPos;
@@ -201,59 +202,59 @@ public abstract class SqlOperatorBaseTest {
           "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]");
 
   public static final String[] NUMERIC_TYPE_NAMES = {
-    "TINYINT", "SMALLINT", "INTEGER", "BIGINT",
-    "DECIMAL(5, 2)", "REAL", "FLOAT", "DOUBLE"
+      "TINYINT", "SMALLINT", "INTEGER", "BIGINT",
+      "DECIMAL(5, 2)", "REAL", "FLOAT", "DOUBLE"
   };
 
   // REVIEW jvs 27-Apr-2006:  for Float and Double, MIN_VALUE
   // is the smallest positive value, not the smallest negative value
   public static final String[] MIN_NUMERIC_STRINGS = {
-    Long.toString(Byte.MIN_VALUE),
-    Long.toString(Short.MIN_VALUE),
-    Long.toString(Integer.MIN_VALUE),
-    Long.toString(Long.MIN_VALUE),
-    "-999.99",
+      Long.toString(Byte.MIN_VALUE),
+      Long.toString(Short.MIN_VALUE),
+      Long.toString(Integer.MIN_VALUE),
+      Long.toString(Long.MIN_VALUE),
+      "-999.99",
 
-    // NOTE jvs 26-Apr-2006:  Win32 takes smaller values from win32_values.h
-    "1E-37", /*Float.toString(Float.MIN_VALUE)*/
-    "2E-307", /*Double.toString(Double.MIN_VALUE)*/
-    "2E-307" /*Double.toString(Double.MIN_VALUE)*/,
+      // NOTE jvs 26-Apr-2006:  Win32 takes smaller values from win32_values.h
+      "1E-37", /*Float.toString(Float.MIN_VALUE)*/
+      "2E-307", /*Double.toString(Double.MIN_VALUE)*/
+      "2E-307" /*Double.toString(Double.MIN_VALUE)*/,
   };
 
   public static final String[] MIN_OVERFLOW_NUMERIC_STRINGS = {
-    Long.toString(Byte.MIN_VALUE - 1),
-    Long.toString(Short.MIN_VALUE - 1),
-    Long.toString((long) Integer.MIN_VALUE - 1),
-    new BigDecimal(Long.MIN_VALUE).subtract(BigDecimal.ONE).toString(),
-    "-1000.00",
-    "1e-46",
-    "1e-324",
-    "1e-324"
+      Long.toString(Byte.MIN_VALUE - 1),
+      Long.toString(Short.MIN_VALUE - 1),
+      Long.toString((long) Integer.MIN_VALUE - 1),
+      new BigDecimal(Long.MIN_VALUE).subtract(BigDecimal.ONE).toString(),
+      "-1000.00",
+      "1e-46",
+      "1e-324",
+      "1e-324"
   };
 
   public static final String[] MAX_NUMERIC_STRINGS = {
-    Long.toString(Byte.MAX_VALUE),
-    Long.toString(Short.MAX_VALUE),
-    Long.toString(Integer.MAX_VALUE),
-    Long.toString(Long.MAX_VALUE), "999.99",
+      Long.toString(Byte.MAX_VALUE),
+      Long.toString(Short.MAX_VALUE),
+      Long.toString(Integer.MAX_VALUE),
+      Long.toString(Long.MAX_VALUE), "999.99",
 
-    // NOTE jvs 26-Apr-2006:  use something slightly less than MAX_VALUE
-    // because roundtripping string to approx to string doesn't preserve
-    // MAX_VALUE on win32
-    "3.4028234E38", /*Float.toString(Float.MAX_VALUE)*/
-    "1.79769313486231E308", /*Double.toString(Double.MAX_VALUE)*/
-    "1.79769313486231E308" /*Double.toString(Double.MAX_VALUE)*/
+      // NOTE jvs 26-Apr-2006:  use something slightly less than MAX_VALUE
+      // because roundtripping string to approx to string doesn't preserve
+      // MAX_VALUE on win32
+      "3.4028234E38", /*Float.toString(Float.MAX_VALUE)*/
+      "1.79769313486231E308", /*Double.toString(Double.MAX_VALUE)*/
+      "1.79769313486231E308" /*Double.toString(Double.MAX_VALUE)*/
   };
 
   public static final String[] MAX_OVERFLOW_NUMERIC_STRINGS = {
-    Long.toString(Byte.MAX_VALUE + 1),
-    Long.toString(Short.MAX_VALUE + 1),
-    Long.toString((long) Integer.MAX_VALUE + 1),
-    (new BigDecimal(Long.MAX_VALUE)).add(BigDecimal.ONE).toString(),
-    "1000.00",
-    "1e39",
-    "-1e309",
-    "1e309"
+      Long.toString(Byte.MAX_VALUE + 1),
+      Long.toString(Short.MAX_VALUE + 1),
+      Long.toString((long) Integer.MAX_VALUE + 1),
+      (new BigDecimal(Long.MAX_VALUE)).add(BigDecimal.ONE).toString(),
+      "1000.00",
+      "1e39",
+      "-1e309",
+      "1e309"
   };
   private static final boolean[] FALSE_TRUE = {false, true};
   private static final SqlTester.VmName VM_FENNEL = SqlTester.VmName.FENNEL;
@@ -1138,11 +1139,13 @@ public abstract class SqlOperatorBaseTest {
     tester.checkNull("cast(null as boolean)");
   }
 
-  @Ignore("[CALCITE-1439] Handling errors during constant reduction")
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-1439">[CALCITE-1439]
+   * Handling errors during constant reduction</a>. */
   @Test public void testCastInvalid() {
-    // Constant reduction kicks in and generates Java constants that throw
-    // when the class is loaded, thus ExceptionInInitializerError. We don't have
-    // a fix yet.
+    // Before CALCITE-1439 was fixed, constant reduction would kick in and
+    // generate Java constants that throw when the class is loaded, thus
+    // ExceptionInInitializerError.
     tester.checkScalarExact("cast('15' as integer)", "INTEGER NOT NULL", "15");
     tester.checkFails("cast('15.4' as integer)", "xxx", true);
     tester.checkFails("cast('15.6' as integer)", "xxx", true);
@@ -1316,6 +1319,14 @@ public abstract class SqlOperatorBaseTest {
     tester.checkScalar(
         "cast('1945-02-24 12:42:25.34' as TIMESTAMP)",
         "1945-02-24 12:42:25",
+        "TIMESTAMP(0) NOT NULL");
+    tester.checkScalar(
+        "cast('1945-12-31' as TIMESTAMP)",
+        "1945-12-31 00:00:00",
+        "TIMESTAMP(0) NOT NULL");
+    tester.checkScalar(
+        "cast('2004-02-29' as TIMESTAMP)",
+        "2004-02-29 00:00:00",
         "TIMESTAMP(0) NOT NULL");
 
     if (Bug.FRG282_FIXED) {
@@ -2428,22 +2439,22 @@ public abstract class SqlOperatorBaseTest {
    * TIMESTAMP values. */
   @Test public void testPeriodOperators() {
     String[] times = {
-      "TIME '01:00:00'",
-      "TIME '02:00:00'",
-      "TIME '03:00:00'",
-      "TIME '04:00:00'",
+        "TIME '01:00:00'",
+        "TIME '02:00:00'",
+        "TIME '03:00:00'",
+        "TIME '04:00:00'",
     };
     String[] dates = {
-      "DATE '1970-01-01'",
-      "DATE '1970-02-01'",
-      "DATE '1970-03-01'",
-      "DATE '1970-04-01'",
+        "DATE '1970-01-01'",
+        "DATE '1970-02-01'",
+        "DATE '1970-03-01'",
+        "DATE '1970-04-01'",
     };
     String[] timestamps = {
-      "TIMESTAMP '1970-01-01 00:00:00'",
-      "TIMESTAMP '1970-02-01 00:00:00'",
-      "TIMESTAMP '1970-03-01 00:00:00'",
-      "TIMESTAMP '1970-04-01 00:00:00'",
+        "TIMESTAMP '1970-01-01 00:00:00'",
+        "TIMESTAMP '1970-02-01 00:00:00'",
+        "TIMESTAMP '1970-03-01 00:00:00'",
+        "TIMESTAMP '1970-04-01 00:00:00'",
     };
     checkOverlaps(new OverlapChecker(times));
     checkOverlaps(new OverlapChecker(dates));
@@ -3806,13 +3817,13 @@ public abstract class SqlOperatorBaseTest {
     final SqlTester tester1 = oracleTester();
     tester1.setFor(OracleSqlOperatorTable.TRANSLATE3);
     tester1.checkString(
-       "translate('aabbcc', 'ab', '+-')",
-       "++--cc",
-       "VARCHAR(6) NOT NULL");
+        "translate('aabbcc', 'ab', '+-')",
+        "++--cc",
+        "VARCHAR(6) NOT NULL");
     tester1.checkString(
         "translate('aabbcc', 'ab', 'ba')",
-       "bbaacc",
-       "VARCHAR(6) NOT NULL");
+        "bbaacc",
+        "VARCHAR(6) NOT NULL");
     tester1.checkString(
         "translate('aabbcc', 'ab', '')",
         "cc",
@@ -3822,15 +3833,15 @@ public abstract class SqlOperatorBaseTest {
         "aabbcc",
         "VARCHAR(6) NOT NULL");
     tester1.checkString(
-       "translate(cast('aabbcc' as varchar(10)), 'ab', '+-')",
-       "++--cc",
-       "VARCHAR(10) NOT NULL");
+        "translate(cast('aabbcc' as varchar(10)), 'ab', '+-')",
+        "++--cc",
+        "VARCHAR(10) NOT NULL");
     tester1.checkNull(
-       "translate(cast(null as varchar(7)), 'ab', '+-')");
+        "translate(cast(null as varchar(7)), 'ab', '+-')");
     tester1.checkNull(
-       "translate('aabbcc', cast(null as varchar(2)), '+-')");
+        "translate('aabbcc', cast(null as varchar(2)), '+-')");
     tester1.checkNull(
-       "translate('aabbcc', 'ab', cast(null as varchar(2)))");
+        "translate('aabbcc', 'ab', cast(null as varchar(2)))");
   }
 
   @Test public void testOverlayFunc() {
@@ -6194,12 +6205,57 @@ public abstract class SqlOperatorBaseTest {
 
     // string values -- note that empty string is not null
     final String[] stringValues = {
-      "'a'", "CAST(NULL AS VARCHAR(1))", "''"
+        "'a'", "CAST(NULL AS VARCHAR(1))", "''"
     };
     tester.checkAgg("COUNT(*)", stringValues, 3, (double) 0);
     tester.checkAgg("COUNT(x)", stringValues, 2, (double) 0);
     tester.checkAgg("COUNT(DISTINCT x)", stringValues, 2, (double) 0);
     tester.checkAgg("COUNT(DISTINCT 123)", stringValues, 1, (double) 0);
+  }
+
+  @Test public void testApproxCountDistinctFunc() {
+    tester.setFor(SqlStdOperatorTable.COUNT, VM_EXPAND);
+    tester.checkFails("approx_count_distinct(^*^)", "Unknown identifier '\\*'",
+        false);
+    tester.checkType("approx_count_distinct('name')", "BIGINT NOT NULL");
+    tester.checkType("approx_count_distinct(1)", "BIGINT NOT NULL");
+    tester.checkType("approx_count_distinct(1.2)", "BIGINT NOT NULL");
+    tester.checkType("APPROX_COUNT_DISTINCT(DISTINCT 'x')", "BIGINT NOT NULL");
+    tester.checkFails("^APPROX_COUNT_DISTINCT()^",
+        "Invalid number of arguments to function 'APPROX_COUNT_DISTINCT'. "
+            + "Was expecting 1 arguments",
+        false);
+    tester.checkType("approx_count_distinct(1, 2)", "BIGINT NOT NULL");
+    tester.checkType("approx_count_distinct(1, 2, 'x', 'y')",
+        "BIGINT NOT NULL");
+    final String[] values = {"0", "CAST(null AS INTEGER)", "1", "0"};
+    // currently APPROX_COUNT_DISTINCT(x) returns the same as COUNT(DISTINCT x)
+    tester.checkAgg(
+        "APPROX_COUNT_DISTINCT(x)",
+        values,
+        2,
+        (double) 0);
+    tester.checkAgg(
+        "APPROX_COUNT_DISTINCT(CASE x WHEN 0 THEN NULL ELSE -1 END)",
+        values,
+        1,
+        (double) 0);
+    // DISTINCT keyword is allowed but has no effect
+    tester.checkAgg(
+        "APPROX_COUNT_DISTINCT(DISTINCT x)",
+        values,
+        2,
+        (double) 0);
+
+    // string values -- note that empty string is not null
+    final String[] stringValues = {
+        "'a'", "CAST(NULL AS VARCHAR(1))", "''"
+    };
+    tester.checkAgg("APPROX_COUNT_DISTINCT(x)", stringValues, 2, (double) 0);
+    tester.checkAgg("APPROX_COUNT_DISTINCT(DISTINCT x)", stringValues, 2,
+        (double) 0);
+    tester.checkAgg("APPROX_COUNT_DISTINCT(DISTINCT 123)", stringValues, 1,
+        (double) 0);
   }
 
   @Test public void testSumFunc() {
@@ -6417,6 +6473,33 @@ public abstract class SqlOperatorBaseTest {
         0d);
   }
 
+  @Test public void testStddevFunc() {
+    tester.setFor(SqlStdOperatorTable.STDDEV, VM_EXPAND);
+    tester.checkFails(
+        "stddev(^*^)",
+        "Unknown identifier '\\*'",
+        false);
+    tester.checkFails(
+        "^stddev(cast(null as varchar(2)))^",
+        "(?s)Cannot apply 'STDDEV' to arguments of type 'STDDEV\\(<VARCHAR\\(2\\)>\\)'\\. Supported form\\(s\\): 'STDDEV\\(<NUMERIC>\\)'.*",
+        false);
+    tester.checkType("stddev(CAST(NULL AS INTEGER))", "INTEGER");
+    checkAggType(tester, "stddev(DISTINCT 1.5)", "DECIMAL(2, 1) NOT NULL");
+    final String[] values = {"0", "CAST(null AS FLOAT)", "3", "3"};
+    // with one value
+    tester.checkAgg(
+        "stddev(x)",
+        new String[]{"5"},
+        null,
+        0d);
+    // with zero values
+    tester.checkAgg(
+        "stddev(x)",
+        new String[]{},
+        null,
+        0d);
+  }
+
   @Test public void testVarPopFunc() {
     tester.setFor(SqlStdOperatorTable.VAR_POP, VM_EXPAND);
     tester.checkFails(
@@ -6500,6 +6583,49 @@ public abstract class SqlOperatorBaseTest {
     // with zero values
     tester.checkAgg(
         "var_samp(x)",
+        new String[]{},
+        null,
+        0d);
+  }
+
+  @Test public void testVarFunc() {
+    tester.setFor(SqlStdOperatorTable.VARIANCE, VM_EXPAND);
+    tester.checkFails(
+        "variance(^*^)",
+        "Unknown identifier '\\*'",
+        false);
+    tester.checkFails(
+        "^variance(cast(null as varchar(2)))^",
+        "(?s)Cannot apply 'VARIANCE' to arguments of type 'VARIANCE\\(<VARCHAR\\(2\\)>\\)'\\. Supported form\\(s\\): 'VARIANCE\\(<NUMERIC>\\)'.*",
+        false);
+    tester.checkType("variance(CAST(NULL AS INTEGER))", "INTEGER");
+    checkAggType(tester, "variance(DISTINCT 1.5)", "DECIMAL(2, 1) NOT NULL");
+    final String[] values = {"0", "CAST(null AS FLOAT)", "3", "3"};
+    if (!enable) {
+      return;
+    }
+    tester.checkAgg(
+        "variance(x)", values, 3d, // verified on Oracle 10g
+        0d);
+    tester.checkAgg(
+        "variance(DISTINCT x)", // Oracle does not allow distinct
+        values,
+        4.5d,
+        0.0001d);
+    tester.checkAgg(
+        "variance(DISTINCT CASE x WHEN 0 THEN NULL ELSE -1 END)",
+        values,
+        null,
+        0d);
+    // with one value
+    tester.checkAgg(
+        "variance(x)",
+        new String[]{"5"},
+        null,
+        0d);
+    // with zero values
+    tester.checkAgg(
+        "variance(x)",
         new String[]{},
         null,
         0d);
@@ -6663,7 +6789,7 @@ public abstract class SqlOperatorBaseTest {
         SqlLiteral literal =
             type.getSqlTypeName().createLiteral(o, SqlParserPos.ZERO);
         SqlString literalString =
-            literal.toSqlString(SqlDialect.DUMMY);
+            literal.toSqlString(AnsiSqlDialect.DEFAULT);
         final String expr =
             "CAST(" + literalString
                 + " AS " + type + ")";
@@ -6713,7 +6839,7 @@ public abstract class SqlOperatorBaseTest {
         SqlLiteral literal =
             type.getSqlTypeName().createLiteral(o, SqlParserPos.ZERO);
         SqlString literalString =
-            literal.toSqlString(SqlDialect.DUMMY);
+            literal.toSqlString(AnsiSqlDialect.DEFAULT);
 
         if ((type.getSqlTypeName() == SqlTypeName.BIGINT)
             || ((type.getSqlTypeName() == SqlTypeName.DECIMAL)
@@ -6830,7 +6956,7 @@ public abstract class SqlOperatorBaseTest {
             continue;
           }
           final SqlPrettyWriter writer =
-              new SqlPrettyWriter(SqlDialect.CALCITE);
+              new SqlPrettyWriter(CalciteSqlDialect.DEFAULT);
           op.unparse(writer, call, 0, 0);
           final String s = writer.toSqlString().toString();
           if (s.startsWith("OVERLAY(")
@@ -6893,7 +7019,7 @@ public abstract class SqlOperatorBaseTest {
       implements SqlTester.ResultChecker {
     private final Pattern[] patterns;
 
-    public ExceptionResultChecker(Pattern... patterns) {
+    ExceptionResultChecker(Pattern... patterns) {
       this.patterns = patterns;
     }
 
@@ -6928,7 +7054,7 @@ public abstract class SqlOperatorBaseTest {
     private final Object expected;
     private final Pattern[] patterns;
 
-    public ValueOrExceptionResultChecker(
+    ValueOrExceptionResultChecker(
         Object expected, Pattern... patterns) {
       this.expected = expected;
       this.patterns = patterns;

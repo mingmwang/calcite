@@ -235,6 +235,8 @@ public class AggregateJoinTransposeRule extends RelOptRule {
                 ? Mappings.createIdentity(fieldCount)
                 : Mappings.createShiftMapping(fieldCount + offset, 0, offset,
                     fieldCount);
+        final int oldGroupKeyCount = aggregate.getGroupCount();
+        final int newGroupKeyCount = belowAggregateKey.cardinality();
         for (Ord<AggregateCall> aggCall : Ord.zip(aggregate.getAggCallList())) {
           final SqlAggFunction aggregation = aggCall.e.getAggregation();
           final SqlSplittableAggFunction splitter =
@@ -242,7 +244,9 @@ public class AggregateJoinTransposeRule extends RelOptRule {
                   aggregation.unwrap(SqlSplittableAggFunction.class));
           final AggregateCall call1;
           if (fieldSet.contains(ImmutableBitSet.of(aggCall.e.getArgList()))) {
-            call1 = splitter.split(aggCall.e, mapping);
+            final AggregateCall splitCall = splitter.split(aggCall.e, mapping);
+            call1 = splitCall.adaptTo(joinInput, splitCall.getArgList(),
+                splitCall.filterArg, oldGroupKeyCount, newGroupKeyCount);
           } else {
             call1 = splitter.other(rexBuilder.getTypeFactory(), aggCall.e);
           }
@@ -253,7 +257,7 @@ public class AggregateJoinTransposeRule extends RelOptRule {
           }
         }
         side.newInput = relBuilder.push(joinInput)
-            .aggregate(relBuilder.groupKey(belowAggregateKey, false, null),
+            .aggregate(relBuilder.groupKey(belowAggregateKey, null),
                 belowAggCalls)
             .build();
       }
@@ -336,7 +340,7 @@ public class AggregateJoinTransposeRule extends RelOptRule {
     if (!aggConvertedToProjects) {
       relBuilder.aggregate(
           relBuilder.groupKey(Mappings.apply(mapping, aggregate.getGroupSet()),
-              aggregate.indicator, Mappings.apply2(mapping, aggregate.getGroupSets())),
+              Mappings.apply2(mapping, aggregate.getGroupSets())),
           newAggCalls);
     }
 
@@ -391,8 +395,8 @@ public class AggregateJoinTransposeRule extends RelOptRule {
 
   /** Creates a {@link org.apache.calcite.sql.SqlSplittableAggFunction.Registry}
    * that is a view of a list. */
-  private static <E> SqlSplittableAggFunction.Registry<E>
-  registry(final List<E> list) {
+  private static <E> SqlSplittableAggFunction.Registry<E> registry(
+      final List<E> list) {
     return new SqlSplittableAggFunction.Registry<E>() {
       public int register(E e) {
         int i = list.indexOf(e);

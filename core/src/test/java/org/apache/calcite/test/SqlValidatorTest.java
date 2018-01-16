@@ -992,6 +992,24 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         "Binary literal string must contain an even number of hexits");
   }
 
+  /**
+   * Tests whether the GEOMETRY data type is allowed.
+   *
+   * @see SqlConformance#allowGeometry()
+   */
+  @Test public void testGeometry() {
+    final SqlTester lenient =
+        tester.withConformance(SqlConformanceEnum.LENIENT);
+    final SqlTester strict =
+        tester.withConformance(SqlConformanceEnum.STRICT_2003);
+
+    final String err =
+        "Geo-spatial extensions and the GEOMETRY data type are not enabled";
+    sql("select cast(null as geometry) as g from emp")
+        .tester(strict).fails(err)
+        .tester(lenient).sansCarets().ok();
+  }
+
   @Test public void testDateTime() {
     // LOCAL_TIME
     checkExp("LOCALTIME(3)");
@@ -3934,6 +3952,17 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         .fails("ORDER BY expression should not contain OVER clause");
   }
 
+  @Test public void testAggregateFunctionInOver() {
+    final String sql = "select sum(deptno) over (order by count(empno))\n"
+        + "from emp\n"
+        + "group by deptno";
+    winSql(sql).ok();
+    final String sql2 = "select sum(^empno^) over (order by count(empno))\n"
+        + "from emp\n"
+        + "group by deptno";
+    winSql(sql2).fails("Expression 'EMPNO' is not being grouped");
+  }
+
   @Test public void testWindowFunctions() {
     // SQL 03 Section 6.10
 
@@ -4125,6 +4154,36 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
     winSql("select rank() over w from emp window w as ^()^")
         .fails(
             "RANK or DENSE_RANK functions require ORDER BY clause in window specification");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-1954">[CALCITE-1954]
+   * Column from outer join should be null, whether or not it is aliased</a>. */
+  @Test public void testLeftOuterJoinWithAlias() {
+    final String query = "select *\n"
+        + "from (select row_number() over (order by sal) from emp) as emp1(r1)\n"
+        + "left outer join\n"
+        + "(select  dense_rank() over(order by sal) from emp) as emp2(r2)\n"
+        + "on (emp1.r1 = emp2.r2)";
+    // In this case, R2 is nullable in the join since we have a left outer join.
+    final String type = "RecordType(BIGINT NOT NULL R1, BIGINT R2) NOT NULL";
+    sql(query).type(type);
+
+    // Similar query, without "AS t(c)"
+    final String query2 = "select *\n"
+        + "from (select row_number() over (order by sal) as r1 from emp) as emp1\n"
+        + "left outer join\n"
+        + "(select dense_rank() over(order by sal) as r2 from emp) as emp2\n"
+        + "on (emp1.r1 = emp2.r2)";
+    sql(query2).type(type);
+
+    // Similar query, without "AS t"
+    final String query3 = "select *\n"
+        + "from (select row_number() over (order by sal) as r1 from emp)\n"
+        + "left outer join\n"
+        + "(select dense_rank() over(order by sal) as r2 from emp)\n"
+        + "on r1 = r2";
+    sql(query3).type(type);
   }
 
   @Test public void testInvalidWindowFunctionWithGroupBy() {
@@ -5195,34 +5254,55 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
   }
 
   @Test public void testGroupId() {
+    final String groupIdOnlyInAggregate =
+        "GROUP_ID operator may only occur in an aggregate query";
+    final String groupIdWrongClause =
+        "GROUP_ID operator may only occur in SELECT, HAVING or ORDER BY clause";
+
     sql("select deptno, group_id() from emp group by deptno").ok();
     sql("select deptno, ^group_id^ as x from emp group by deptno")
         .fails("Column 'GROUP_ID' not found in any table");
     sql("select deptno, ^group_id(deptno)^ from emp group by deptno")
         .fails("Invalid number of arguments to function 'GROUP_ID'\\. "
             + "Was expecting 0 arguments");
+    // Oracle throws "GROUPING function only supported with GROUP BY CUBE or
+    // ROLLUP"
+    sql("select ^group_id()^ from emp")
+        .fails(groupIdOnlyInAggregate);
     sql("select deptno from emp order by ^group_id(deptno)^")
-        .fails("GROUP_ID operator may only occur in an aggregate query");
+        .fails(groupIdOnlyInAggregate);
+    // Oracle throws "GROUPING function only supported with GROUP BY CUBE or
+    // ROLLUP"
+    sql("select 1 from emp order by ^group_id()^")
+        .fails(groupIdOnlyInAggregate);
+    sql("select 1 from emp order by ^grouping(deptno)^")
+        .fails("GROUPING operator may only occur in an aggregate query");
+    // Oracle throws "group function is not allowed here"
     sql("select deptno from emp where ^group_id()^ = 1")
-        .fails("GROUP_ID operator may only occur in an aggregate query");
+        .fails(groupIdOnlyInAggregate);
+    // Oracle throws "group function is not allowed here"
+    sql("select deptno from emp group by ^group_id()^")
+        .fails(groupIdWrongClause);
     sql("select deptno from emp where ^group_id()^ = 1 group by deptno")
-        .fails(
-            "GROUP_ID operator may only occur in SELECT, HAVING or ORDER BY clause");
+        .fails(groupIdWrongClause);
     sql("select deptno from emp group by deptno, ^group_id()^")
-        .fails(
-            "GROUP_ID operator may only occur in SELECT, HAVING or ORDER BY clause");
+        .fails(groupIdWrongClause);
     sql("select deptno from emp\n"
         + "group by grouping sets(deptno, ^group_id()^)")
-        .fails(
-            "GROUP_ID operator may only occur in SELECT, HAVING or ORDER BY clause");
+        .fails(groupIdWrongClause);
     sql("select deptno from emp\n"
         + "group by cube(empno, ^group_id()^)")
-        .fails(
-            "GROUP_ID operator may only occur in SELECT, HAVING or ORDER BY clause");
+        .fails(groupIdWrongClause);
     sql("select deptno from emp\n"
         + "group by rollup(empno, ^group_id()^)")
-        .fails(
-            "GROUP_ID operator may only occur in SELECT, HAVING or ORDER BY clause");
+        .fails(groupIdWrongClause);
+    sql("select grouping(^group_id()^) from emp")
+        .fails(groupIdOnlyInAggregate);
+    // Oracle throws "not a GROUP BY expression"
+    sql("select grouping(^group_id()^) from emp group by deptno")
+        .fails(groupIdWrongClause);
+    sql("select ^grouping(sum(empno))^ from emp group by deptno")
+        .fails("Aggregate expressions cannot be nested");
   }
 
   @Test public void testCubeGrouping() {
@@ -6733,7 +6813,7 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + " from emp group by deptno\n"
         + " window w1 as (partition by ^empno^ ROWS 2 PRECEDING),\n"
         + " w2 as (order by deptno ROWS 2 PRECEDING)")
-        .fails("Expression 'EMP.EMPNO' is not being grouped");
+        .fails("Expression 'EMPNO' is not being grouped");
     sql("select avg(count(empno)) over w\n"
         + "from emp group by deptno\n"
         + "window w as (partition by deptno order by ^empno^)")
@@ -7053,8 +7133,8 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
 
     // Other operators with similar syntax
     String[] ops = {
-      "overlaps", "contains", "equals", "precedes", "succeeds",
-      "immediately precedes", "immediately succeeds"
+        "overlaps", "contains", "equals", "precedes", "succeeds",
+        "immediately precedes", "immediately succeeds"
     };
     for (String op : ops) {
       checkExpType("period (date '1-2-3', date '1-2-3')\n"
@@ -7331,7 +7411,9 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + " UNNEST(d.employees) as e";
     final String type = "RecordType(INTEGER NOT NULL DEPTNO,"
         + " INTEGER NOT NULL EMPNO,"
-        + " VARCHAR(10) NOT NULL ENAME) NOT NULL";
+        + " VARCHAR(10) NOT NULL ENAME,"
+        + " RecordType(VARCHAR(10) NOT NULL TYPE, VARCHAR(20) NOT NULL DESC)"
+        + " NOT NULL ARRAY NOT NULL SKILLS) NOT NULL";
     sql(sql).type(type);
 
     // equivalent query using CROSS JOIN
@@ -7708,6 +7790,15 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         "RecordType(INTEGER NOT NULL X, VARCHAR(20) NOT NULL EMAIL, INTEGER NOT NULL Y) NOT NULL");
   }
 
+  @Test public void testArrayOfRecordType() {
+    sql("SELECT name, dept_nested.employees[1].ne as ne from dept_nested")
+        .fails("Unknown field 'NE'");
+    sql("SELECT name, dept_nested.employees[1].ename as ename from dept_nested")
+        .type("RecordType(VARCHAR(10) NOT NULL NAME, VARCHAR(10) ENAME) NOT NULL");
+    sql("SELECT dept_nested.employees[1].skills[1].desc as DESCRIPTION from dept_nested")
+        .type("RecordType(VARCHAR(20) DESCRIPTION) NOT NULL");
+  }
+
   /** Test case for
    * <a href="https://issues.apache.org/jira/browse/CALCITE-497">[CALCITE-497]
    * Support optional qualifier for column name references</a>. */
@@ -7835,6 +7926,17 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
     final String expected = "SELECT `NAME`\n"
         + "FROM `DEPT`\n"
         + "FETCH NEXT 2 ROWS ONLY";
+    tester.checkRewrite(validator, sql, expected);
+  }
+
+  @Test public void testRewriteWithLimitWithDynamicParameters() {
+    SqlValidator validator = tester.getValidator();
+    validator.setIdentifierExpansion(false);
+    final String sql = "select name from dept offset ? rows fetch next ? rows only";
+    final String expected = "SELECT `NAME`\n"
+        + "FROM `DEPT`\n"
+        + "OFFSET ? ROWS\n"
+        + "FETCH NEXT ? ROWS ONLY";
     tester.checkRewrite(validator, sql, expected);
   }
 
@@ -8396,6 +8498,7 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "\n"
         + "CURRENT_VALUE -\n"
         + "DEFAULT -\n"
+        + "DOT -\n"
         + "ITEM -\n"
         + "NEXT_VALUE -\n"
         + "PATTERN_EXCLUDE -\n"
@@ -8407,7 +8510,6 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "$LiteralChain -\n"
         + "+ pre\n"
         + "- pre\n"
-        + ". left\n"
         + "FINAL pre\n"
         + "RUNNING pre\n"
         + "\n"
@@ -8506,7 +8608,6 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "UNION ALL left\n"
         + "\n"
         + "$throw -\n"
-        + "EXTRACT_DATE -\n"
         + "FILTER left\n"
         + "Reinterpret -\n"
         + "TABLE pre\n"
@@ -8633,9 +8734,22 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
         + "  timestamp '1970-01-01 00:00:00', 1, 1, 1)";
     pragmaticTester.checkQueryFails(sql3,
         "Column 'SLACKER' has no default value and does not allow NULLs");
-    assertThat("Missing non-NULL column generates a call to factory",
+    assertThat("Should not check for default value, even if if column is missing"
+            + "from INSERT and nullable",
         MockCatalogReader.CountingFactory.THREAD_CALL_COUNT.get().get(),
-        is(c + 1));
+        is(c));
+
+    // Now remove DEPTNO, which has a default value, from the target list.
+    // Will generate an extra call to newColumnDefaultValue at sql-to-rel time,
+    // just not yet.
+    final String sql4 = "insert into ^emp^ (empno, ename, job, mgr, hiredate,\n"
+        + "  sal, comm, slacker)\n"
+        + "values(1, 'nom', 'job', 0,\n"
+        + "  timestamp '1970-01-01 00:00:00', 1, 1, false)";
+    pragmaticTester.checkQuery(sql4);
+    assertThat("Missing DEFAULT column generates a call to factory",
+        MockCatalogReader.CountingFactory.THREAD_CALL_COUNT.get().get(),
+        is(c));
   }
 
   @Test public void testInsertView() {
@@ -10290,6 +10404,9 @@ public class SqlValidatorTest extends SqlValidatorTestCase {
             .fails(error);
 
     sql("select (((^slackingmin^))) from emp_r")
+            .fails(error);
+
+    sql("select ^slackingmin^ from nest.emp_r")
             .fails(error);
   }
 

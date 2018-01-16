@@ -22,7 +22,10 @@ import org.apache.calcite.sql.type.OperandTypes;
 import org.apache.calcite.sql.type.ReturnTypes;
 
 /**
- * The {@code GROUP_ID} function.
+ * The {@code GROUP_ID()} function.
+ *
+ * <p>Accepts no arguments. If the query has {@code GROUP BY x, y, z} then
+ * {@code GROUP_ID()} is the same as {@code GROUPING(x, y, z)}.
  *
  * <p>This function is not defined in the SQL standard; our implementation is
  * consistent with Oracle.
@@ -30,7 +33,7 @@ import org.apache.calcite.sql.type.ReturnTypes;
  * <p>Some examples are in {@code agg.iq}.
  */
 class SqlGroupIdFunction extends SqlAbstractGroupFunction {
-  public SqlGroupIdFunction() {
+  SqlGroupIdFunction() {
     super("GROUP_ID", SqlKind.GROUP_ID, ReturnTypes.BIGINT, null,
         OperandTypes.NILADIC, SqlFunctionCategory.SYSTEM);
   }

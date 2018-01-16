@@ -46,6 +46,8 @@ import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Pair;
 import org.apache.calcite.util.Util;
 
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 
 import java.lang.reflect.Type;
@@ -66,6 +68,8 @@ public class EnumerableAggregate extends Aggregate implements EnumerableRel {
       List<AggregateCall> aggCalls)
       throws InvalidRelException {
     super(cluster, traitSet, child, indicator, groupSet, groupSets, aggCalls);
+    Preconditions.checkArgument(!indicator,
+        "EnumerableAggregate no longer supports indicator fields");
     assert getConvention() instanceof EnumerableConvention;
 
     for (AggregateCall aggCall : aggCalls) {
@@ -104,7 +108,6 @@ public class EnumerableAggregate extends Aggregate implements EnumerableRel {
         builder.append(
             "child",
             result.block);
-    final RelDataType inputRowType = getInput().getRowType();
 
     final PhysType physType =
         PhysTypeImpl.of(
@@ -178,7 +181,6 @@ public class EnumerableAggregate extends Aggregate implements EnumerableRel {
         inputPhysType.project(groupSet.asList(), getGroupType() != Group.SIMPLE,
             JavaRowFormat.LIST);
     final int groupCount = getGroupCount();
-    final int indicatorCount = getIndicatorCount();
 
     final List<AggImpState> aggs = new ArrayList<>(aggCalls.size());
     for (Ord<AggregateCall> call : Ord.zip(aggCalls)) {
@@ -196,34 +198,11 @@ public class EnumerableAggregate extends Aggregate implements EnumerableRel {
 
     final List<Type> aggStateTypes = new ArrayList<>();
     for (final AggImpState agg : aggs) {
-      agg.context =
-          new AggContext() {
-            public SqlAggFunction aggregation() {
-              return agg.call.getAggregation();
-            }
-
-            public RelDataType returnRelType() {
-              return agg.call.type;
-            }
-
-            public Type returnType() {
-              return EnumUtils.javaClass(typeFactory, returnRelType());
-            }
-
-            public List<? extends RelDataType> parameterRelTypes() {
-              return EnumUtils.fieldRowTypes(inputRowType, null,
-                  agg.call.getArgList());
-            }
-
-            public List<? extends Type> parameterTypes() {
-              return EnumUtils.fieldTypes(typeFactory,
-                  parameterRelTypes());
-            }
-          };
-      List<Type> state =
-          agg.implementor.getStateType(agg.context);
+      agg.context = new AggContextImpl(agg, typeFactory);
+      final List<Type> state = agg.implementor.getStateType(agg.context);
 
       if (state.isEmpty()) {
+        agg.state = ImmutableList.of();
         continue;
       }
 
@@ -246,12 +225,11 @@ public class EnumerableAggregate extends Aggregate implements EnumerableRel {
       agg.state = decls;
       initExpressions.addAll(decls);
       agg.implementor.implementReset(agg.context,
-          new AggResultContextImpl(initBlock, decls));
+          new AggResultContextImpl(initBlock, agg.call, decls, null, null));
     }
 
     final PhysType accPhysType =
-        PhysTypeImpl.of(
-            typeFactory,
+        PhysTypeImpl.of(typeFactory,
             typeFactory.createSyntheticType(aggStateTypes));
 
 
@@ -259,25 +237,23 @@ public class EnumerableAggregate extends Aggregate implements EnumerableRel {
       // We have to initialize the SyntheticRecordType instance this way, to avoid using
       // class constructor with too many parameters.
       JavaTypeFactoryImpl.SyntheticRecordType synType =
-        (JavaTypeFactoryImpl.SyntheticRecordType) accPhysType.getJavaRowType();
+          (JavaTypeFactoryImpl.SyntheticRecordType)
+          accPhysType.getJavaRowType();
       final ParameterExpression record0_ =
-        Expressions.parameter(accPhysType.getJavaRowType(), "record0");
+          Expressions.parameter(accPhysType.getJavaRowType(), "record0");
       initBlock.add(Expressions.declare(0, record0_, null));
       initBlock.add(
-        Expressions.statement(
-          Expressions.assign(
-            record0_,
-            Expressions.new_(accPhysType.getJavaRowType()))));
+          Expressions.statement(
+              Expressions.assign(record0_,
+                  Expressions.new_(accPhysType.getJavaRowType()))));
       List<Types.RecordField> fieldList = synType.getRecordFields();
       for (int i = 0; i < initExpressions.size(); i++) {
         Expression right = initExpressions.get(i);
         initBlock.add(
-          Expressions.statement(
-            Expressions.assign(
-              Expressions.field(
-                record0_,
-                fieldList.get(i)),
-              right)));
+            Expressions.statement(
+                Expressions.assign(
+                    Expressions.field(record0_, fieldList.get(i)),
+                    right)));
       }
       initBlock.add(record0_);
     } else {
@@ -371,15 +347,24 @@ public class EnumerableAggregate extends Aggregate implements EnumerableRel {
     } else {
       final Type keyType = keyPhysType.getJavaRowType();
       key_ = Expressions.parameter(keyType, "key");
-      for (int j = 0; j < groupCount + indicatorCount; j++) {
-        results.add(
-            keyPhysType.fieldReference(key_, j));
+      for (int j = 0; j < groupCount; j++) {
+        final Expression ref = keyPhysType.fieldReference(key_, j);
+        if (getGroupType() == Group.SIMPLE) {
+          results.add(ref);
+        } else {
+          results.add(
+              Expressions.condition(
+                  keyPhysType.fieldReference(key_, groupCount + j),
+                  Expressions.constant(null),
+                  Expressions.box(ref)));
+        }
       }
     }
     for (final AggImpState agg : aggs) {
       results.add(
           agg.implementor.implementResult(agg.context,
-              new AggResultContextImpl(resultBlock, agg.state)));
+              new AggResultContextImpl(resultBlock, agg.call, agg.state, key_,
+                  keyPhysType)));
     }
     resultBlock.add(physType.record(results));
     if (getGroupType() != Group.SIMPLE) {
@@ -462,6 +447,57 @@ public class EnumerableAggregate extends Aggregate implements EnumerableRel {
                       .appendIfNotNull(keyPhysType.comparer()))));
     }
     return implementor.result(physType, builder.toBlock());
+  }
+
+  /** An implementation of {@link AggContext}. */
+  private class AggContextImpl implements AggContext {
+    private final AggImpState agg;
+    private final JavaTypeFactory typeFactory;
+
+    AggContextImpl(AggImpState agg, JavaTypeFactory typeFactory) {
+      this.agg = agg;
+      this.typeFactory = typeFactory;
+    }
+
+    public SqlAggFunction aggregation() {
+      return agg.call.getAggregation();
+    }
+
+    public RelDataType returnRelType() {
+      return agg.call.type;
+    }
+
+    public Type returnType() {
+      return EnumUtils.javaClass(typeFactory, returnRelType());
+    }
+
+    public List<? extends RelDataType> parameterRelTypes() {
+      return EnumUtils.fieldRowTypes(getInput().getRowType(), null,
+          agg.call.getArgList());
+    }
+
+    public List<? extends Type> parameterTypes() {
+      return EnumUtils.fieldTypes(
+          typeFactory,
+          parameterRelTypes());
+    }
+
+    public List<ImmutableBitSet> groupSets() {
+      return groupSets;
+    }
+
+    public List<Integer> keyOrdinals() {
+      return groupSet.asList();
+    }
+
+    public List<? extends RelDataType> keyRelTypes() {
+      return EnumUtils.fieldRowTypes(getInput().getRowType(), null,
+          groupSet.asList());
+    }
+
+    public List<? extends Type> keyTypes() {
+      return EnumUtils.fieldTypes(typeFactory, keyRelTypes());
+    }
   }
 }
 

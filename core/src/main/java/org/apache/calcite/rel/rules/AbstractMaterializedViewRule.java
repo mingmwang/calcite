@@ -41,6 +41,7 @@ import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
+import org.apache.calcite.rex.RexExecutor;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexShuttle;
@@ -176,9 +177,11 @@ public abstract class AbstractMaterializedViewRule extends RelOptRule {
     final RexBuilder rexBuilder = node.getCluster().getRexBuilder();
     final RelMetadataQuery mq = RelMetadataQuery.instance();
     final RelOptPlanner planner = call.getPlanner();
+    final RexExecutor executor =
+        Util.first(planner.getExecutor(), RexUtil.EXECUTOR);
+    final RelOptPredicateList predicates = RelOptPredicateList.EMPTY;
     final RexSimplify simplify =
-        new RexSimplify(rexBuilder, true,
-            planner.getExecutor() != null ? planner.getExecutor() : RexUtil.EXECUTOR);
+        new RexSimplify(rexBuilder, predicates, true, executor);
 
     final List<RelOptMaterialization> materializations =
         (planner instanceof VolcanoPlanner)
@@ -1045,16 +1048,22 @@ public abstract class AbstractMaterializedViewRule extends RelOptRule {
         aggregateCalls.add(
             relBuilder.aggregateCall(
                 SubstitutionVisitor.getRollup(aggCall.getAggregation()),
-                aggCall.isDistinct(),
-                null,
+                aggCall.isDistinct(), aggCall.isApproximate(), null,
                 aggCall.name,
-                ImmutableList.of(
-                    rexBuilder.makeInputRef(
-                        relBuilder.peek(), aggregate.getGroupCount() + i))));
+                rexBuilder.makeInputRef(relBuilder.peek(),
+                    aggregate.getGroupCount() + i)));
       }
+      RelNode prevNode = relBuilder.peek();
       RelNode result = relBuilder
-          .aggregate(relBuilder.groupKey(groupSet, false, null), aggregateCalls)
+          .aggregate(relBuilder.groupKey(groupSet, null), aggregateCalls)
           .build();
+      if (prevNode == result && groupSet.cardinality() != result.getRowType().getFieldCount()) {
+        // Aggregate was not inserted but we need to prune columns
+        result = relBuilder
+            .push(result)
+            .project(relBuilder.fields(groupSet.asList()))
+            .build();
+      }
       if (topProject != null) {
         // Top project
         return topProject.copy(topProject.getTraitSet(), ImmutableList.of(result));
@@ -1248,10 +1257,9 @@ public abstract class AbstractMaterializedViewRule extends RelOptRule {
                 aggregateCalls.add(
                     relBuilder.aggregateCall(
                         SubstitutionVisitor.getRollup(queryAggCall.getAggregation()),
-                        queryAggCall.isDistinct(),
-                        null,
-                        queryAggCall.name,
-                        ImmutableList.of(rexBuilder.makeInputRef(input, k))));
+                        queryAggCall.isDistinct(), queryAggCall.isApproximate(),
+                        null, queryAggCall.name,
+                        rexBuilder.makeInputRef(input, k)));
                 rewritingMapping.set(k, sourceIdx);
                 added = true;
                 break;
@@ -1265,17 +1273,24 @@ public abstract class AbstractMaterializedViewRule extends RelOptRule {
             aggregateCalls.add(
                 relBuilder.aggregateCall(
                     SubstitutionVisitor.getRollup(queryAggCall.getAggregation()),
-                    queryAggCall.isDistinct(),
-                    null,
-                    queryAggCall.name,
-                    ImmutableList.of(rexBuilder.makeInputRef(input, targetIdx))));
+                    queryAggCall.isDistinct(), queryAggCall.isApproximate(),
+                    null, queryAggCall.name,
+                    rexBuilder.makeInputRef(input, targetIdx)));
             rewritingMapping.set(targetIdx, sourceIdx);
           }
         }
+        RelNode prevNode = result;
         result = relBuilder
             .push(result)
-            .aggregate(relBuilder.groupKey(groupSet, false, null), aggregateCalls)
+            .aggregate(relBuilder.groupKey(groupSet, null), aggregateCalls)
             .build();
+        if (prevNode == result && groupSet.cardinality() != result.getRowType().getFieldCount()) {
+          // Aggregate was not inserted but we need to prune columns
+          result = relBuilder
+              .push(result)
+              .project(relBuilder.fields(groupSet.asList()))
+              .build();
+        }
         // We introduce a project on top, as group by columns order is lost
         List<RexNode> projects = new ArrayList<>();
         Mapping inverseMapping = rewritingMapping.inverse();
@@ -2186,7 +2201,7 @@ public abstract class AbstractMaterializedViewRule extends RelOptRule {
     final Multimap<RexTableInputRef, RexTableInputRef> equiColumns =
         ArrayListMultimap.create();
 
-    public Edge(RelTableRef source, RelTableRef target) {
+    Edge(RelTableRef source, RelTableRef target) {
       super(source, target);
     }
 

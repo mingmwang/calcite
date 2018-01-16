@@ -37,10 +37,11 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.type.CollectionType;
-
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+
+import org.joda.time.Interval;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -247,6 +248,39 @@ class DruidConnectionImpl implements DruidConnection {
             expect(parser, JsonToken.END_OBJECT);
           }
         }
+        break;
+
+      case SCAN:
+        if (parser.nextToken() == JsonToken.START_ARRAY) {
+          while (parser.nextToken() == JsonToken.START_OBJECT) {
+            expectScalarField(parser, "segmentId");
+
+            expect(parser, JsonToken.FIELD_NAME);
+            if (parser.getCurrentName().equals("columns")) {
+              expect(parser, JsonToken.START_ARRAY);
+              while (parser.nextToken() != JsonToken.END_ARRAY) {
+                // Skip the columns list
+              }
+            }
+            if (parser.nextToken() == JsonToken.FIELD_NAME
+                && parser.getCurrentName().equals("events")
+                && parser.nextToken() == JsonToken.START_ARRAY) {
+              // Events is Array of Arrays where each array is a row
+              while (parser.nextToken() == JsonToken.START_ARRAY) {
+                for (String field : fieldNames) {
+                  parseFieldForName(fieldNames, fieldTypes, posTimestampField, rowBuilder, parser,
+                      field);
+                }
+                expect(parser, JsonToken.END_ARRAY);
+                Row row = rowBuilder.build();
+                sink.send(row);
+                rowBuilder.reset();
+                page.totalRowCount += 1;
+              }
+            }
+            expect(parser, JsonToken.END_OBJECT);
+          }
+        }
       }
     } catch (IOException | InterruptedException e) {
       throw new RuntimeException(e);
@@ -268,7 +302,12 @@ class DruidConnectionImpl implements DruidConnection {
   private void parseField(List<String> fieldNames, List<ColumnMetaData.Rep> fieldTypes,
       int posTimestampField, Row.RowBuilder rowBuilder, JsonParser parser) throws IOException {
     final String fieldName = parser.getCurrentName();
+    parseFieldForName(fieldNames, fieldTypes, posTimestampField, rowBuilder, parser, fieldName);
+  }
 
+  private void parseFieldForName(List<String> fieldNames, List<ColumnMetaData.Rep> fieldTypes,
+      int posTimestampField, Row.RowBuilder rowBuilder, JsonParser parser, String fieldName)
+      throws IOException {
     // Move to next token, which is name's value
     JsonToken token = parser.nextToken();
 
@@ -286,13 +325,18 @@ class DruidConnectionImpl implements DruidConnection {
 
     if (isTimestampColumn || ColumnMetaData.Rep.JAVA_SQL_TIMESTAMP == type) {
       try {
-        final Date parse;
-        // synchronized block to avoid race condition
-        synchronized (UTC_TIMESTAMP_FORMAT) {
-          parse = UTC_TIMESTAMP_FORMAT.parse(parser.getText());
+        final long timeInMillis;
+
+        if (token == JsonToken.VALUE_NUMBER_INT) {
+          timeInMillis = parser.getLongValue();
+        } else {
+          // synchronized block to avoid race condition
+          synchronized (UTC_TIMESTAMP_FORMAT) {
+            timeInMillis = UTC_TIMESTAMP_FORMAT.parse(parser.getText()).getTime();
+          }
         }
         if (posTimestampField != -1) {
-          rowBuilder.set(posTimestampField, parse.getTime());
+          rowBuilder.set(posTimestampField, timeInMillis);
         }
       } catch (ParseException e) {
         // ignore bad value
@@ -354,6 +398,7 @@ class DruidConnectionImpl implements DruidConnection {
           case "NaN":
             throw new RuntimeException("/ by zero");
           }
+          rowBuilder.set(i, Long.valueOf(s));
           break;
         case FLOAT:
         case PRIMITIVE_FLOAT:
@@ -371,10 +416,12 @@ class DruidConnectionImpl implements DruidConnection {
             rowBuilder.set(i, Double.NaN);
             return;
           }
+          rowBuilder.set(i, Double.valueOf(s));
+          break;
         }
+      } else {
+        rowBuilder.set(i, s);
       }
-      rowBuilder.set(i, s);
-      break;
     }
   }
 
@@ -418,7 +465,7 @@ class DruidConnectionImpl implements DruidConnection {
     }
     expect(parser, JsonToken.START_OBJECT);
     while (parser.nextToken() != JsonToken.END_OBJECT) {
-        // empty
+      // empty
     }
   }
 
@@ -493,7 +540,7 @@ class DruidConnectionImpl implements DruidConnection {
 
   /** Reads segment metadata, and populates a list of columns and metrics. */
   void metadata(String dataSourceName, String timestampColumnName,
-      List<LocalInterval> intervals,
+      List<Interval> intervals,
       Map<String, SqlTypeName> fieldBuilder, Set<String> metricNameBuilder,
       Map<String, List<ComplexMetric>> complexMetrics) {
     final String url = this.url + "/druid/v2/?pretty";
@@ -512,7 +559,7 @@ class DruidConnectionImpl implements DruidConnection {
               JsonSegmentMetadata.class);
       final List<JsonSegmentMetadata> list = mapper.readValue(in, listType);
       in.close();
-      fieldBuilder.put(timestampColumnName, SqlTypeName.TIMESTAMP);
+      fieldBuilder.put(timestampColumnName, SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
       for (JsonSegmentMetadata o : list) {
         for (Map.Entry<String, JsonColumn> entry : o.columns.entrySet()) {
           if (entry.getKey().equals(DruidTable.DEFAULT_TIMESTAMP_COLUMN)) {
@@ -595,7 +642,9 @@ class DruidConnectionImpl implements DruidConnection {
   }
 
   /** An {@link Enumerator} that gets its rows from a {@link BlockingQueue}.
-   * There are other fields to signal errors and end-of-data. */
+   * There are other fields to signal errors and end-of-data.
+   *
+   * @param <E> element type */
   private static class BlockingQueueEnumerator<E> implements Enumerator<E> {
     final BlockingQueue<E> queue = new ArrayBlockingQueue<>(1000);
     final AtomicBoolean done = new AtomicBoolean(false);
@@ -645,7 +694,6 @@ class DruidConnectionImpl implements DruidConnection {
       return "{" + pagingIdentifier + ": " + offset + "}";
     }
   }
-
 
   /** Result of a "segmentMetadata" call, populated by Jackson. */
   @SuppressWarnings({ "WeakerAccess", "unused" })

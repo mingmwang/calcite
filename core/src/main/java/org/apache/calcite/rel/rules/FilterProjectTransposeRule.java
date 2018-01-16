@@ -26,7 +26,6 @@ import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexOver;
-import org.apache.calcite.rex.RexSimplify;
 import org.apache.calcite.rex.RexUtil;
 import org.apache.calcite.tools.RelBuilder;
 import org.apache.calcite.tools.RelBuilderFactory;
@@ -119,11 +118,9 @@ public class FilterProjectTransposeRule extends RelOptRule {
     final RelBuilder relBuilder = call.builder();
     RelNode newFilterRel;
     if (copyFilter) {
-      final RexSimplify simplify =
-          new RexSimplify(relBuilder.getRexBuilder(), false, RexUtil.EXECUTOR);
-      newCondition = simplify.removeNullabilityCast(newCondition);
       newFilterRel = filter.copy(filter.getTraitSet(), project.getInput(),
-          newCondition);
+          RexUtil.removeNullabilityCast(relBuilder.getTypeFactory(),
+              newCondition));
     } else {
       newFilterRel =
           relBuilder.push(project.getInput()).filter(newCondition).build();

@@ -28,7 +28,9 @@ import org.apache.calcite.plan.volcano.TraitPropagationTest;
 import org.apache.calcite.plan.volcano.VolcanoPlannerTest;
 import org.apache.calcite.plan.volcano.VolcanoPlannerTraitTest;
 import org.apache.calcite.prepare.LookupOperatorOverloadsTest;
+import org.apache.calcite.profile.ProfilerTest;
 import org.apache.calcite.rel.RelCollationTest;
+import org.apache.calcite.rel.RelDistributionTest;
 import org.apache.calcite.rel.rel2sql.RelToSqlConverterTest;
 import org.apache.calcite.rel.rules.DateRangeRulesTest;
 import org.apache.calcite.rex.RexBuilderTest;
@@ -99,6 +101,7 @@ import org.junit.runners.Suite;
     VolcanoPlannerTest.class,
     HepPlannerTest.class,
     TraitPropagationTest.class,
+    RelDistributionTest.class,
     RelWriterTest.class,
     RexProgramTest.class,
     SqlOperatorBindingTest.class,
@@ -154,10 +157,11 @@ import org.junit.runners.Suite;
     LinqFrontJdbcBackTest.class,
     JdbcFrontJdbcBackLinqMiddleTest.class,
     CalciteSqlOperatorTest.class,
+    ProfilerTest.class,
     LatticeTest.class,
     ReflectiveSchemaTest.class,
     JdbcTest.class,
-    QuidemTest.class,
+    CoreQuidemTest.class,
     CalciteRemoteDriverTest.class,
     StreamTest.class,
 
@@ -175,7 +179,7 @@ import org.junit.runners.Suite;
     // system tests and benchmarks (very slow, but usually only run if
     // '-Dcalcite.test.slow' is specified)
     FoodmartTest.class
-})
+    })
 public class CalciteSuite {
 }
 

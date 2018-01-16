@@ -39,6 +39,7 @@ import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.rex.RexBuilder;
+import org.apache.calcite.schema.ColumnStrategy;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlOperatorTable;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
@@ -403,6 +404,10 @@ public abstract class SqlToRelTestBase {
         return ImmutableList.of();
       }
 
+      public List<ColumnStrategy> getColumnStrategies() {
+        throw new UnsupportedOperationException();
+      }
+
       public Expression getExpression(Class clazz) {
         return null;
       }
@@ -422,7 +427,7 @@ public abstract class SqlToRelTestBase {
   private static class DelegatingRelOptTable implements RelOptTable {
     private final RelOptTable parent;
 
-    public DelegatingRelOptTable(RelOptTable parent) {
+    DelegatingRelOptTable(RelOptTable parent) {
       this.parent = parent;
     }
 
@@ -476,6 +481,10 @@ public abstract class SqlToRelTestBase {
     public List<RelReferentialConstraint> getReferentialConstraints() {
       return parent.getReferentialConstraints();
     }
+
+    public List<ColumnStrategy> getColumnStrategies() {
+      return parent.getColumnStrategies();
+    }
   }
 
   /**
@@ -491,8 +500,7 @@ public abstract class SqlToRelTestBase {
     private final boolean enableTrim;
     private final boolean enableExpand;
     private final SqlConformance conformance;
-    private final Function<RelDataTypeFactory, Prepare.CatalogReader>
-    catalogReaderFactory;
+    private final Function<RelDataTypeFactory, Prepare.CatalogReader> catalogReaderFactory;
     private final Function<RelOptCluster, RelOptCluster> clusterFactory;
     private RelDataTypeFactory typeFactory;
     public final SqlToRelConverter.Config config;
@@ -788,7 +796,7 @@ public abstract class SqlToRelTestBase {
 
     /** Validator for testing. */
   private static class FarragoTestValidator extends SqlValidatorImpl {
-    public FarragoTestValidator(
+    FarragoTestValidator(
         SqlOperatorTable opTab,
         SqlValidatorCatalogReader catalogReader,
         RelDataTypeFactory typeFactory,

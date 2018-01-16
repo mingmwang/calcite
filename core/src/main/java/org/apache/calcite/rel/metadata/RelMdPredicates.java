@@ -419,7 +419,9 @@ public class RelMdPredicates
     final RelOptCluster cluster = union.getCluster();
     final RexExecutor executor =
         Util.first(cluster.getPlanner().getExecutor(), RexUtil.EXECUTOR);
-    final RexSimplify simplify = new RexSimplify(rB, true, executor);
+    final RelOptPredicateList predicates = RelOptPredicateList.EMPTY;
+    final RexSimplify simplify =
+        new RexSimplify(rB, predicates, true, executor);
     RexNode disjPred = simplify.simplifyOrs(finalResidualPreds);
     if (!disjPred.isAlwaysTrue()) {
       preds.add(disjPred);
@@ -500,7 +502,7 @@ public class RelMdPredicates
     final RexNode leftChildPredicates;
     final RexNode rightChildPredicates;
 
-    public JoinConditionBasedPredicateInference(Join joinRel,
+    JoinConditionBasedPredicateInference(Join joinRel,
             RexNode lPreds, RexNode rPreds) {
       this(joinRel, joinRel instanceof SemiJoin, lPreds, rPreds);
     }
@@ -827,7 +829,9 @@ public class RelMdPredicates
           if (level == 0) {
             nextMapping = null;
           } else {
-            iterationIdx[level] = 0;
+            int tmp = columnSets[level].nextSetBit(0);
+            nextMapping.set(columns[level], tmp);
+            iterationIdx[level] = tmp + 1;
             computeNextMapping(level - 1);
           }
         } else {

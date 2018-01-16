@@ -938,6 +938,21 @@ public enum SqlKind {
    * the {@link #SESSION} group function. */
   SESSION_END,
 
+  /** Column declaration. */
+  COLUMN_DECL,
+
+  /** {@code CHECK} constraint. */
+  CHECK,
+
+  /** {@code UNIQUE} constraint. */
+  UNIQUE,
+
+  /** {@code PRIMARY KEY} constraint. */
+  PRIMARY_KEY,
+
+  /** {@code FOREIGN KEY} constraint. */
+  FOREIGN_KEY,
+
   // DDL and session control statements follow. The list is not exhaustive: feel
   // free to add more.
 
@@ -949,6 +964,15 @@ public enum SqlKind {
 
   /** {@code ALTER SESSION} DDL statement. */
   ALTER_SESSION,
+
+  /** {@code CREATE SCHEMA} DDL statement. */
+  CREATE_SCHEMA,
+
+  /** {@code CREATE FOREIGN SCHEMA} DDL statement. */
+  CREATE_FOREIGN_SCHEMA,
+
+  /** {@code DROP SCHEMA} DDL statement. */
+  DROP_SCHEMA,
 
   /** {@code CREATE TABLE} DDL statement. */
   CREATE_TABLE,
@@ -967,6 +991,15 @@ public enum SqlKind {
 
   /** {@code DROP VIEW} DDL statement. */
   DROP_VIEW,
+
+  /** {@code CREATE MATERIALIZED VIEW} DDL statement. */
+  CREATE_MATERIALIZED_VIEW,
+
+  /** {@code ALTER MATERIALIZED VIEW} DDL statement. */
+  ALTER_MATERIALIZED_VIEW,
+
+  /** {@code DROP MATERIALIZED VIEW} DDL statement. */
+  DROP_MATERIALIZED_VIEW,
 
   /** {@code CREATE SEQUENCE} DDL statement. */
   CREATE_SEQUENCE,
@@ -1045,8 +1078,11 @@ public enum SqlKind {
    */
   public static final EnumSet<SqlKind> DDL =
       EnumSet.of(COMMIT, ROLLBACK, ALTER_SESSION,
+          CREATE_SCHEMA, CREATE_FOREIGN_SCHEMA, DROP_SCHEMA,
           CREATE_TABLE, ALTER_TABLE, DROP_TABLE,
           CREATE_VIEW, ALTER_VIEW, DROP_VIEW,
+          CREATE_MATERIALIZED_VIEW, ALTER_MATERIALIZED_VIEW,
+          DROP_MATERIALIZED_VIEW,
           CREATE_SEQUENCE, ALTER_SEQUENCE, DROP_SEQUENCE,
           CREATE_INDEX, ALTER_INDEX, DROP_INDEX,
           SET_OPTION, OTHER_DDL);
@@ -1119,6 +1155,15 @@ public enum SqlKind {
       EnumSet.of(OTHER_FUNCTION, ROW, TRIM, LTRIM, RTRIM, CAST, JDBC_FN);
 
   /**
+   * Category of SqlAvgAggFunction.
+   *
+   * <p>Consists of {@link #AVG}, {@link #STDDEV_POP}, {@link #STDDEV_SAMP},
+   * {@link #VAR_POP}, {@link #VAR_SAMP}.
+   */
+  public static final Set<SqlKind> AVG_AGG_FUNCTIONS =
+      EnumSet.of(AVG, STDDEV_POP, STDDEV_SAMP, VAR_POP, VAR_SAMP);
+
+  /**
    * Category of comparison operators.
    *
    * <p>Consists of:
@@ -1170,19 +1215,31 @@ public enum SqlKind {
 
   /** Returns the kind that you get if you apply NOT to this kind.
    *
-   * <p>For example, {@code IS_NOT_NULL.negate()} returns {@link #IS_NULL}. */
+   * <p>For example, {@code IS_NOT_NULL.negate()} returns {@link #IS_NULL}.
+   *
+   * <p>For {@link #IS_TRUE}, {@link #IS_FALSE}, {@link #IS_NOT_TRUE},
+   * {@link #IS_NOT_FALSE}, nullable inputs need to be treated carefully.
+   *
+   * <p>{@code NOT(IS_TRUE(null))} = {@code NOT(false)} = {@code true},
+   * while {@code IS_FALSE(null)} = {@code false},
+   * so {@code NOT(IS_TRUE(X))} should be {@code IS_NOT_TRUE(X)}.
+   * On the other hand,
+   * {@code IS_TRUE(NOT(null))} = {@code IS_TRUE(null)} = {@code false}.
+   *
+   * <p>This is why negate() != negateNullSafe() for these operators.
+   */
   public SqlKind negate() {
     switch (this) {
     case IS_TRUE:
-      return IS_FALSE;
+      return IS_NOT_TRUE;
     case IS_FALSE:
-      return IS_TRUE;
+      return IS_NOT_FALSE;
     case IS_NULL:
       return IS_NOT_NULL;
     case IS_NOT_TRUE:
-      return IS_NOT_FALSE;
+      return IS_TRUE;
     case IS_NOT_FALSE:
-      return IS_NOT_TRUE;
+      return IS_FALSE;
     case IS_NOT_NULL:
       return IS_NULL;
     case IS_DISTINCT_FROM:
@@ -1195,7 +1252,18 @@ public enum SqlKind {
   }
 
   /** Returns the kind that you get if you negate this kind.
-   * To conform to null semantics, null value should not be compared. */
+   * To conform to null semantics, null value should not be compared.
+   *
+   * <p>For {@link #IS_TRUE}, {@link #IS_FALSE}, {@link #IS_NOT_TRUE} and
+   * {@link #IS_NOT_FALSE}, nullable inputs need to be treated carefully:
+   *
+   * <ul>
+   * <li>NOT(IS_TRUE(null)) = NOT(false) = true
+   * <li>IS_TRUE(NOT(null)) = IS_TRUE(null) = false
+   * <li>IS_FALSE(null) = false
+   * <li>IS_NOT_TRUE(null) = true
+   * </ul>
+   */
   public SqlKind negateNullSafe() {
     switch (this) {
     case EQUALS:
@@ -1210,6 +1278,14 @@ public enum SqlKind {
       return GREATER_THAN;
     case GREATER_THAN_OR_EQUAL:
       return LESS_THAN;
+    case IS_TRUE:
+      return IS_FALSE;
+    case IS_FALSE:
+      return IS_TRUE;
+    case IS_NOT_TRUE:
+      return IS_NOT_FALSE;
+    case IS_NOT_FALSE:
+      return IS_NOT_TRUE;
     default:
       return this.negate();
     }

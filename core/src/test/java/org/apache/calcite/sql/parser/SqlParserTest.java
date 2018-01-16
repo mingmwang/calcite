@@ -18,10 +18,10 @@ package org.apache.calcite.sql.parser;
 
 import org.apache.calcite.avatica.util.Casing;
 import org.apache.calcite.avatica.util.Quoting;
-import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlSetOption;
+import org.apache.calcite.sql.dialect.CalciteSqlDialect;
 import org.apache.calcite.sql.parser.impl.SqlParserImpl;
 import org.apache.calcite.sql.pretty.SqlPrettyWriter;
 import org.apache.calcite.sql.validate.SqlConformance;
@@ -699,6 +699,13 @@ public class SqlParserTest {
         "Lexical error at line 1, column 10\\.  Encountered: \"#\" \\(35\\), after : \"\"");
   }
 
+  // TODO: should fail in parser
+  @Test public void testStarAsFails() {
+    sql("select * as x from emp")
+        .ok("SELECT * AS `X`\n"
+            + "FROM `EMP`");
+  }
+
   @Test public void testDerivedColumnList() {
     check("select * from emp as e (empno, gender) where true",
         "SELECT *\n"
@@ -1020,8 +1027,8 @@ public class SqlParserTest {
 
   @Test public void testOverlaps() {
     final String[] ops = {
-      "overlaps", "equals", "precedes", "succeeds",
-      "immediately precedes", "immediately succeeds"
+        "overlaps", "equals", "precedes", "succeeds",
+        "immediately precedes", "immediately succeeds"
     };
     final String[] periods = {"period ", ""};
     for (String period : periods) {
@@ -1435,18 +1442,18 @@ public class SqlParserTest {
   }
 
   @Test public void testFunctionDefaultArgument() {
-    checkExp("foo(1, DEFAULT, default, 'default', \"default\", 3)",
-        "`FOO`(1, DEFAULT, DEFAULT, 'default', `default`, 3)");
-    checkExp("foo(DEFAULT)",
-        "`FOO`(DEFAULT)");
-    checkExp("foo(x => 1, DEFAULT)",
-        "`FOO`(`X` => 1, DEFAULT)");
-    checkExp("foo(y => DEFAULT, x => 1)",
-        "`FOO`(`Y` => DEFAULT, `X` => 1)");
-    checkExp("foo(x => 1, y => DEFAULT)",
-        "`FOO`(`X` => 1, `Y` => DEFAULT)");
-    check("select sum(DISTINCT DEFAULT) from t group by x",
-        "SELECT SUM(DISTINCT DEFAULT)\n"
+    sql("foo(1, DEFAULT, default, 'default', \"default\", 3)").expression()
+        .ok("`FOO`(1, DEFAULT, DEFAULT, 'default', `default`, 3)");
+    sql("foo(DEFAULT)").expression()
+        .ok("`FOO`(DEFAULT)");
+    sql("foo(x => 1, DEFAULT)").expression()
+        .ok("`FOO`(`X` => 1, DEFAULT)");
+    sql("foo(y => DEFAULT, x => 1)").expression()
+        .ok("`FOO`(`Y` => DEFAULT, `X` => 1)");
+    sql("foo(x => 1, y => DEFAULT)").expression()
+        .ok("`FOO`(`X` => 1, `Y` => DEFAULT)");
+    sql("select sum(DISTINCT DEFAULT) from t group by x")
+        .ok("SELECT SUM(DISTINCT DEFAULT)\n"
             + "FROM `T`\n"
             + "GROUP BY `X`");
     checkExpFails("foo(x ^+^ DEFAULT)",
@@ -1455,6 +1462,31 @@ public class SqlParserTest {
         "(?s).*Encountered \"\\+ DEFAULT\" at .*");
     checkExpFails("foo(0, DEFAULT ^+^ y)",
         "(?s).*Encountered \"\\+\" at .*");
+  }
+
+  @Test public void testDefault() {
+    sql("select ^DEFAULT^ from emp")
+        .fails("(?s)Encountered \"DEFAULT\" at .*");
+    sql("select cast(empno ^+^ DEFAULT as double) from emp")
+        .fails("(?s)Encountered \"\\+ DEFAULT\" at .*");
+    sql("select empno ^+^ DEFAULT + deptno from emp")
+        .fails("(?s)Encountered \"\\+ DEFAULT\" at .*");
+    sql("select power(0, DEFAULT ^+^ empno) from emp")
+        .fails("(?s)Encountered \"\\+\" at .*");
+    sql("select * from emp join dept ^on^ DEFAULT")
+        .fails("(?s)Encountered \"on DEFAULT\" at .*");
+    sql("select * from emp where empno ^>^ DEFAULT or deptno < 10")
+        .fails("(?s)Encountered \"> DEFAULT\" at .*");
+    sql("select * from emp order by ^DEFAULT^ desc")
+        .fails("(?s)Encountered \"DEFAULT\" at .*");
+    final String expected = "INSERT INTO `DEPT` (`NAME`, `DEPTNO`)\n"
+        + "VALUES (ROW('a', DEFAULT))";
+    sql("insert into dept (name, deptno) values ('a', DEFAULT)")
+        .ok(expected);
+    sql("insert into dept (name, deptno) values ('a', 1 ^+^ DEFAULT)")
+        .fails("(?s)Encountered \"\\+ DEFAULT\" at .*");
+    sql("insert into dept (name, deptno) select 'a'^,^ DEFAULT from (values 0)")
+        .fails("(?s)Encountered \", DEFAULT\" at .*");
   }
 
   @Test public void testAggregateFilter() {
@@ -2474,6 +2506,13 @@ public class SqlParserTest {
             + "FROM `FOO`\n"
             + "OFFSET 1 ROWS\n"
             + "FETCH NEXT 3 ROWS ONLY");
+    // OFFSET and FETCH, with dynamic parameters
+    check(
+        "select a from foo offset ? row fetch next ? rows only",
+        "SELECT `A`\n"
+            + "FROM `FOO`\n"
+            + "OFFSET ? ROWS\n"
+            + "FETCH NEXT ? ROWS ONLY");
     // missing ROWS after FETCH
     checkFails(
         "select a from foo offset 1 fetch next 3 ^only^",
@@ -3329,6 +3368,24 @@ public class SqlParserTest {
     final String expected = "INSERT INTO `EMPS`\n"
         + "VALUES (ROW(1, 'Fredkin'))";
     sql("insert into emps values (1,'Fredkin')")
+        .ok(expected)
+        .node(not(isDdl()));
+  }
+
+  @Test public void testInsertValuesDefault() {
+    final String expected = "INSERT INTO `EMPS`\n"
+        + "VALUES (ROW(1, DEFAULT, 'Fredkin'))";
+    sql("insert into emps values (1,DEFAULT,'Fredkin')")
+        .ok(expected)
+        .node(not(isDdl()));
+  }
+
+  @Test public void testInsertValuesRawDefault() {
+    final String expected = "INSERT INTO `EMPS`\n"
+        + "VALUES (ROW(DEFAULT))";
+    sql("insert into emps ^values^ default")
+        .fails("(?s).*Encountered \"values default\" at .*");
+    sql("insert into emps values (default)")
         .ok(expected)
         .node(not(isDdl()));
   }
@@ -4241,6 +4298,11 @@ public class SqlParserTest {
     checkExp("a[1]", "`A`[1]");
     checkExp("a[b[1]]", "`A`[`B`[1]]");
     checkExp("a[b[1 + 2] + 3]", "`A`[(`B`[(1 + 2)] + 3)]");
+  }
+
+  @Test public void testArrayElementWithDot() {
+    checkExp("a[1+2].b.c[2].d", "(((`A`[(1 + 2)].`B`).`C`)[2].`D`)");
+    checkExp("a[b[1]].c.f0[d[1]]", "((`A`[`B`[1]].`C`).`F0`)[`D`[1]]");
   }
 
   @Test public void testArrayValueConstructor() {
@@ -6710,6 +6772,13 @@ public class SqlParserTest {
         "(?s)Encountered \"to\".*");
   }
 
+  @Test public void testGeometry() {
+    checkExpFails("cast(null as geometry)",
+        "Geo-spatial extensions and the GEOMETRY data type are not enabled");
+    conformance = SqlConformanceEnum.LENIENT;
+    checkExp("cast(null as geometry)", "CAST(NULL AS GEOMETRY)");
+  }
+
   @Test public void testIntervalArithmetics() {
     checkExp(
         "TIME '23:59:59' - interval '1' hour ",
@@ -7245,11 +7314,11 @@ public class SqlParserTest {
     SqlNode node = getSqlParser("alter system set schema = true").parseStmt();
     SqlSetOption opt = (SqlSetOption) node;
     assertThat(opt.getScope(), equalTo("SYSTEM"));
-    SqlPrettyWriter writer = new SqlPrettyWriter(SqlDialect.CALCITE);
+    SqlPrettyWriter writer = new SqlPrettyWriter(CalciteSqlDialect.DEFAULT);
     assertThat(writer.format(opt.getName()), equalTo("\"SCHEMA\""));
-    writer = new SqlPrettyWriter(SqlDialect.CALCITE);
+    writer = new SqlPrettyWriter(CalciteSqlDialect.DEFAULT);
     assertThat(writer.format(opt.getValue()), equalTo("TRUE"));
-    writer = new SqlPrettyWriter(SqlDialect.CALCITE);
+    writer = new SqlPrettyWriter(CalciteSqlDialect.DEFAULT);
     assertThat(writer.format(opt),
         equalTo("ALTER SYSTEM SET \"SCHEMA\" = TRUE"));
 
@@ -7269,7 +7338,7 @@ public class SqlParserTest {
 
 
     check("alter system set \"a\".\"number\" = 1",
-      "ALTER SYSTEM SET `a`.`number` = 1");
+        "ALTER SYSTEM SET `a`.`number` = 1");
     sql("set approx = -12.3450")
         .ok("SET `APPROX` = -12.3450")
         .node(isDdl());
@@ -7277,10 +7346,10 @@ public class SqlParserTest {
     node = getSqlParser("reset schema").parseStmt();
     opt = (SqlSetOption) node;
     assertThat(opt.getScope(), equalTo(null));
-    writer = new SqlPrettyWriter(SqlDialect.CALCITE);
+    writer = new SqlPrettyWriter(CalciteSqlDialect.DEFAULT);
     assertThat(writer.format(opt.getName()), equalTo("\"SCHEMA\""));
     assertThat(opt.getValue(), equalTo(null));
-    writer = new SqlPrettyWriter(SqlDialect.CALCITE);
+    writer = new SqlPrettyWriter(CalciteSqlDialect.DEFAULT);
     assertThat(writer.format(opt),
         equalTo("RESET \"SCHEMA\""));
 
@@ -8012,6 +8081,34 @@ public class SqlParserTest {
     sql(sql).ok(expected);
   }
 
+  @Test public void testMatchRecognizeWithin() {
+    final String sql = "select *\n"
+        + "  from t match_recognize\n"
+        + "  (\n"
+        + "    order by rowtime\n"
+        + "    measures STRT.ts as start_ts,\n"
+        + "      LAST(DOWN.ts) as bottom_ts,\n"
+        + "      AVG(stdn.price) as stdn_avg\n"
+        + "    pattern (strt down+ up+) within interval '3' second\n"
+        + "    subset stdn = (strt, down), stdn2 = (strt, down)\n"
+        + "    define\n"
+        + "      down as down.price < PREV(down.price),\n"
+        + "      up as up.price > prev(up.price)\n"
+        + "  ) mr";
+    final String expected = "SELECT *\n"
+        + "FROM `T` MATCH_RECOGNIZE(\n"
+        + "ORDER BY `ROWTIME`\n"
+        + "MEASURES `STRT`.`TS` AS `START_TS`, "
+        + "LAST(`DOWN`.`TS`, 0) AS `BOTTOM_TS`, "
+        + "AVG(`STDN`.`PRICE`) AS `STDN_AVG`\n"
+        + "PATTERN (((`STRT` (`DOWN` +)) (`UP` +))) WITHIN INTERVAL '3' SECOND\n"
+        + "SUBSET (`STDN` = (`STRT`, `DOWN`)), (`STDN2` = (`STRT`, `DOWN`))\n"
+        + "DEFINE `DOWN` AS (`DOWN`.`PRICE` < PREV(`DOWN`.`PRICE`, 1)), "
+        + "`UP` AS (`UP`.`PRICE` > PREV(`UP`.`PRICE`, 1))"
+        + ") AS `MR`";
+    sql(sql).ok(expected);
+  }
+
   //~ Inner Interfaces -------------------------------------------------------
 
   /**
@@ -8143,7 +8240,7 @@ public class SqlParserTest {
       // Unparse again in Calcite dialect (which we can parse), and
       // minimal parentheses.
       final String sql1 =
-          sqlNode.toSqlString(SqlDialect.CALCITE, false).getSql();
+          sqlNode.toSqlString(CalciteSqlDialect.DEFAULT, false).getSql();
 
       // Parse and unparse again.
       SqlNode sqlNode2;
@@ -8155,7 +8252,7 @@ public class SqlParserTest {
         quoting = q;
       }
       final String sql2 =
-          sqlNode2.toSqlString(SqlDialect.CALCITE, false).getSql();
+          sqlNode2.toSqlString(CalciteSqlDialect.DEFAULT, false).getSql();
 
       // Should be the same as we started with.
       assertEquals(sql1, sql2);
@@ -8177,7 +8274,7 @@ public class SqlParserTest {
       // Unparse again in Calcite dialect (which we can parse), and
       // minimal parentheses.
       final String sql1 =
-          sqlNode.toSqlString(SqlDialect.CALCITE, false).getSql();
+          sqlNode.toSqlString(CalciteSqlDialect.DEFAULT, false).getSql();
 
       // Parse and unparse again.
       SqlNode sqlNode2;
@@ -8189,7 +8286,7 @@ public class SqlParserTest {
         quoting = q;
       }
       final String sql2 =
-          sqlNode2.toSqlString(SqlDialect.CALCITE, false).getSql();
+          sqlNode2.toSqlString(CalciteSqlDialect.DEFAULT, false).getSql();
 
       // Should be the same as we started with.
       assertEquals(sql1, sql2);
@@ -8221,24 +8318,43 @@ public class SqlParserTest {
    * {@code sql("values 1").ok();}. */
   protected class Sql {
     private final String sql;
+    private final boolean expression;
 
     Sql(String sql) {
+      this(sql, false);
+    }
+
+    Sql(String sql, boolean expression) {
       this.sql = sql;
+      this.expression = expression;
     }
 
     public Sql ok(String expected) {
-      getTester().check(sql, expected);
+      if (expression) {
+        getTester().checkExp(sql, expected);
+      } else {
+        getTester().check(sql, expected);
+      }
       return this;
     }
 
     public Sql fails(String expectedMsgPattern) {
-      getTester().checkFails(sql, expectedMsgPattern);
+      if (expression) {
+        getTester().checkExpFails(sql, expectedMsgPattern);
+      } else {
+        getTester().checkFails(sql, expectedMsgPattern);
+      }
       return this;
     }
 
     public Sql node(Matcher<SqlNode> matcher) {
       getTester().checkNode(sql, matcher);
       return this;
+    }
+
+    /** Flags that this is an expression, not a whole query. */
+    public Sql expression() {
+      return expression ? this : new Sql(sql, true);
     }
   }
 

@@ -19,12 +19,12 @@ package org.apache.calcite.util;
 import org.apache.calcite.runtime.Resources;
 import org.apache.calcite.runtime.Resources.BooleanProp;
 import org.apache.calcite.runtime.Resources.Default;
+import org.apache.calcite.runtime.Resources.IntProp;
 import org.apache.calcite.runtime.Resources.Resource;
 import org.apache.calcite.runtime.Resources.StringProp;
 
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.security.AccessControlException;
 import java.util.Enumeration;
 import java.util.Properties;
@@ -97,6 +97,18 @@ public interface SaffronProperties {
   @Default("primary")
   StringProp defaultCollationStrength();
 
+  /**
+   * The string property "saffron.metadata.handler.cache.maximum.size" is the
+   * maximum size of the cache of metadata handlers. A typical value is
+   * the number of queries being concurrently prepared multiplied by the number
+   * of types of metadata.
+   *
+   * <p>If the value is less than 0, there is no limit. The default is 1,000.
+   */
+  @Resource("saffron.metadata.handler.cache.maximum.size")
+  @Default("1000")
+  IntProp metadataHandlerCacheMaximumSize();
+
   SaffronProperties INSTANCE = Helper.instance();
 
   /** Helper class. */
@@ -109,16 +121,14 @@ public interface SaffronProperties {
     static SaffronProperties instance() {
       Properties properties = new Properties();
 
-      // read properties from the file "saffron.properties", if it exists
-      File file = new File("saffron.properties");
-      try {
-        if (file.exists()) {
-          try {
-            properties.load(new FileInputStream(file));
-          } catch (IOException e) {
-            throw new RuntimeException("while reading from " + file, e);
-          }
+      // read properties from the file "saffron.properties", if it exists in classpath
+      try (InputStream stream = Helper.class.getClassLoader()
+          .getResourceAsStream("saffron.properties")) {
+        if (stream != null) {
+          properties.load(stream);
         }
+      } catch (IOException e) {
+        throw new RuntimeException("while reading from saffron.properties file", e);
       } catch (AccessControlException e) {
         // we're in a sandbox
       }

@@ -16,6 +16,7 @@
  */
 package org.apache.calcite.rex;
 
+import org.apache.calcite.plan.RelOptPredicateList;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.RelCollations;
@@ -34,6 +35,7 @@ import org.apache.calcite.util.Permutation;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Ordering;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -526,10 +528,10 @@ public class RexProgram {
   /**
    * Given a list of collations which hold for the input to this program,
    * returns a list of collations which hold for its output. The result is
-   * mutable.
+   * mutable and sorted.
    */
   public List<RelCollation> getCollations(List<RelCollation> inputCollations) {
-    List<RelCollation> outputCollations = new ArrayList<>(1);
+    final List<RelCollation> outputCollations = new ArrayList<>();
     deduceCollations(
         outputCollations,
         inputRowType.getFieldCount(), projects,
@@ -539,7 +541,7 @@ public class RexProgram {
 
   /**
    * Given a list of expressions and a description of which are ordered,
-   * computes a list of collations. The result is mutable.
+   * populates a list of collations, sorted in natural order.
    */
   public static void deduceCollations(
       List<RelCollation> outputCollations,
@@ -572,6 +574,7 @@ public class RexProgram {
       // to the output.
       outputCollations.add(RelCollations.of(fieldCollations));
     }
+    Collections.sort(outputCollations, Ordering.natural());
   }
 
   /**
@@ -786,8 +789,10 @@ public class RexProgram {
 
   @Deprecated // to be removed before 2.0
   public RexProgram normalize(RexBuilder rexBuilder, boolean simplify) {
-    return normalize(rexBuilder,
-        simplify ? new RexSimplify(rexBuilder, false, RexUtil.EXECUTOR) : null);
+    final RelOptPredicateList predicates = RelOptPredicateList.EMPTY;
+    return normalize(rexBuilder, simplify
+        ? new RexSimplify(rexBuilder, predicates, false, RexUtil.EXECUTOR)
+        : null);
   }
 
   //~ Inner Classes ----------------------------------------------------------
@@ -807,7 +812,7 @@ public class RexProgram {
      *                             or null
      * @param litmus               Whether to fail
      */
-    public Checker(RelDataType inputRowType,
+    Checker(RelDataType inputRowType,
         List<RelDataType> internalExprTypeList, RelNode.Context context,
         Litmus litmus) {
       super(inputRowType, context, litmus);
@@ -841,7 +846,7 @@ public class RexProgram {
   static class ExpansionShuttle extends RexShuttle {
     private final List<RexNode> exprs;
 
-    public ExpansionShuttle(List<RexNode> exprs) {
+    ExpansionShuttle(List<RexNode> exprs) {
       this.exprs = exprs;
     }
 

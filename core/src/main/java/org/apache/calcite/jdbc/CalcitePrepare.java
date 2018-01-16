@@ -43,6 +43,7 @@ import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.validate.CyclicDefinitionException;
 import org.apache.calcite.sql.validate.SqlValidator;
+import org.apache.calcite.tools.RelRunner;
 import org.apache.calcite.util.ImmutableIntList;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -109,7 +110,14 @@ public interface CalcitePrepare {
   interface Context {
     JavaTypeFactory getTypeFactory();
 
+    /** Returns the root schema for statements that need a read-consistent
+     * snapshot. */
     CalciteSchema getRootSchema();
+
+    /** Returns the root schema for statements that need to be able to modify
+     * schemas and have the results available to other statements. Viz, DDL
+     * statements. */
+    CalciteSchema getMutableRootSchema();
 
     List<String> getDefaultSchemaPath();
 
@@ -124,8 +132,11 @@ public interface CalcitePrepare {
      *
      * <p>The object is being analyzed is typically a view. If it is already
      * being analyzed further up the stack, the view definition can be deduced
-     * to be cylic. */
+     * to be cyclic. */
     List<String> getObjectPath();
+
+    /** Gets a runner; it can execute a relational expression. */
+    RelRunner getRelRunner();
   }
 
   /** Callback to register Spark as the main engine. */
@@ -309,7 +320,9 @@ public interface CalcitePrepare {
 
   /** The result of preparing a query. It gives the Avatica driver framework
    * the information it needs to create a prepared statement, or to execute a
-   * statement directly, without an explicit prepare step. */
+   * statement directly, without an explicit prepare step.
+   *
+   * @param <T> element type */
   class CalciteSignature<T> extends Meta.Signature {
     @JsonIgnore public final RelDataType rowType;
     @JsonIgnore public final CalciteSchema rootSchema;
@@ -317,17 +330,15 @@ public interface CalcitePrepare {
     private final long maxRowCount;
     private final Bindable<T> bindable;
 
+    @Deprecated // to be removed before 2.0
     public CalciteSignature(String sql, List<AvaticaParameter> parameterList,
         Map<String, Object> internalParameters, RelDataType rowType,
         List<ColumnMetaData> columns, Meta.CursorFactory cursorFactory,
         CalciteSchema rootSchema, List<RelCollation> collationList,
         long maxRowCount, Bindable<T> bindable) {
-      super(columns, sql, parameterList, internalParameters, cursorFactory, null);
-      this.rowType = rowType;
-      this.rootSchema = rootSchema;
-      this.collationList = collationList;
-      this.maxRowCount = maxRowCount;
-      this.bindable = bindable;
+      this(sql, parameterList, internalParameters, rowType, columns,
+          cursorFactory, rootSchema, collationList, maxRowCount, bindable,
+          null);
     }
 
     public CalciteSignature(String sql,
@@ -367,7 +378,9 @@ public interface CalcitePrepare {
 
   /** A union type of the three possible ways of expressing a query: as a SQL
    * string, a {@link Queryable} or a {@link RelNode}. Exactly one must be
-   * provided. */
+   * provided.
+   *
+   * @param <T> element type */
   class Query<T> {
     public final String sql;
     public final Queryable<T> queryable;

@@ -49,7 +49,7 @@ import com.google.common.collect.ImmutableList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
+import java.util.SortedSet;
 
 /**
  * Contains factory interface and default implementation for creating various
@@ -71,10 +71,10 @@ public class RelFactories {
       new SemiJoinFactoryImpl();
 
   public static final SortFactory DEFAULT_SORT_FACTORY =
-    new SortFactoryImpl();
+      new SortFactoryImpl();
 
   public static final AggregateFactory DEFAULT_AGGREGATE_FACTORY =
-    new AggregateFactoryImpl();
+      new AggregateFactoryImpl();
 
   public static final MatchFactory DEFAULT_MATCH_FACTORY =
       new MatchFactoryImpl();
@@ -206,6 +206,7 @@ public class RelFactories {
    * that returns a vanilla {@link LogicalAggregate}.
    */
   private static class AggregateFactoryImpl implements AggregateFactory {
+    @SuppressWarnings("deprecation")
     public RelNode createAggregate(RelNode input, boolean indicator,
         ImmutableBitSet groupSet, ImmutableList<ImmutableBitSet> groupSets,
         List<AggregateCall> aggCalls) {
@@ -395,11 +396,12 @@ public class RelFactories {
    */
   public interface MatchFactory {
     /** Creates a {@link Match}. */
-    RelNode createMatchRecognize(RelNode input, RexNode pattern,
-        boolean strictStart, boolean strictEnd,
+    RelNode createMatch(RelNode input, RexNode pattern,
+        RelDataType rowType, boolean strictStart, boolean strictEnd,
         Map<String, RexNode> patternDefinitions, Map<String, RexNode> measures,
-        RexNode after, Map<String, TreeSet<String>> subsets, boolean allRows,
-        List<RexNode> partitionKeys, RelCollation orderKeys, RelDataType rowType);
+        RexNode after, Map<String, ? extends SortedSet<String>> subsets,
+        boolean allRows, List<RexNode> partitionKeys, RelCollation orderKeys,
+        RexNode interval);
   }
 
   /**
@@ -407,13 +409,15 @@ public class RelFactories {
    * that returns a {@link LogicalMatch}.
    */
   private static class MatchFactoryImpl implements MatchFactory {
-    public RelNode createMatchRecognize(RelNode input, RexNode pattern,
-        boolean strictStart, boolean strictEnd,
+    public RelNode createMatch(RelNode input, RexNode pattern,
+        RelDataType rowType, boolean strictStart, boolean strictEnd,
         Map<String, RexNode> patternDefinitions, Map<String, RexNode> measures,
-        RexNode after, Map<String, TreeSet<String>> subsets, boolean allRows,
-        List<RexNode> partitionKeys, RelCollation orderKeys, RelDataType rowType) {
-      return LogicalMatch.create(input, pattern, strictStart, strictEnd,
-          patternDefinitions, measures, after, subsets, allRows, partitionKeys, orderKeys, rowType);
+        RexNode after, Map<String, ? extends SortedSet<String>> subsets,
+        boolean allRows, List<RexNode> partitionKeys, RelCollation orderKeys,
+        RexNode interval) {
+      return LogicalMatch.create(input, rowType, pattern, strictStart,
+          strictEnd, patternDefinitions, measures, after, subsets, allRows,
+          partitionKeys, orderKeys, interval);
     }
   }
 }

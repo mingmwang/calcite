@@ -27,6 +27,7 @@ import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlFilterOperator;
 import org.apache.calcite.sql.SqlFunction;
 import org.apache.calcite.sql.SqlFunctionCategory;
+import org.apache.calcite.sql.SqlGroupedWindowFunction;
 import org.apache.calcite.sql.SqlInternalOperator;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlLateralOperator;
@@ -195,26 +196,28 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
   public static final SqlInternalOperator GROUPING_SETS =
       new SqlRollupOperator("GROUPING SETS", SqlKind.GROUPING_SETS);
 
-  /** {@code GROUPING} function. Occurs in similar places to an aggregate
+  /** {@code GROUPING(c1 [, c2, ...])} function.
+   *
+   * <p>Occurs in similar places to an aggregate
    * function ({@code SELECT}, {@code HAVING} clause, etc. of an aggregate
    * query), but not technically an aggregate function. */
   public static final SqlGroupingFunction GROUPING =
       new SqlGroupingFunction("GROUPING");
 
-  /** {@code GROUP_ID} function. */
+  /** {@code GROUP_ID()} function. (Oracle-specific.) */
   public static final SqlGroupIdFunction GROUP_ID =
       new SqlGroupIdFunction();
 
-  /** {@code GROUP_ID} function is a synonym for {@code GROUPING}.
+  /** {@code GROUPING_ID} function is a synonym for {@code GROUPING}.
    *
    * <p>Some history. The {@code GROUPING} function is in the SQL standard,
-   * and originally supported only one argument. The {@code GROUP_ID} is not
-   * standard (though supported in Oracle and SQL Server) and supports zero or
+   * and originally supported only one argument. {@code GROUPING_ID} is not
+   * standard (though supported in Oracle and SQL Server) and supports one or
    * more arguments.
    *
    * <p>The SQL standard has changed to allow {@code GROUPING} to have multiple
-   * arguments. It is now equivalent to {@code GROUP_ID}, so we made
-   * {@code GROUP_ID} a synonym for {@code GROUPING}. */
+   * arguments. It is now equivalent to {@code GROUPING_ID}, so we made
+   * {@code GROUPING_ID} a synonym for {@code GROUPING}. */
   public static final SqlGroupingFunction GROUPING_ID =
       new SqlGroupingFunction("GROUPING_ID");
 
@@ -292,15 +295,7 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
   /**
    * Dot operator, '<code>.</code>', used for referencing fields of records.
    */
-  public static final SqlBinaryOperator DOT =
-      new SqlBinaryOperator(
-          ".",
-          SqlKind.DOT,
-          80,
-          true,
-          null,
-          null,
-          OperandTypes.ANY_ANY);
+  public static final SqlOperator DOT = new SqlDotOperator();
 
   /**
    * Logical equals operator, '<code>=</code>'.
@@ -825,7 +820,13 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
   /**
    * <code>COUNT</code> aggregate function.
    */
-  public static final SqlAggFunction COUNT = new SqlCountAggFunction();
+  public static final SqlAggFunction COUNT = new SqlCountAggFunction("COUNT");
+
+  /**
+   * <code>APPROX_COUNT_DISTINCT</code> aggregate function.
+   */
+  public static final SqlAggFunction APPROX_COUNT_DISTINCT =
+      new SqlCountAggFunction("APPROX_COUNT_DISTINCT");
 
   /**
    * <code>MIN</code> aggregate function.
@@ -918,6 +919,12 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
       new SqlAvgAggFunction(SqlKind.STDDEV_SAMP);
 
   /**
+   * <code>STDDEV</code> aggregate function.
+   */
+  public static final SqlAggFunction STDDEV =
+      new SqlAvgAggFunction("STDDEV", SqlKind.STDDEV_SAMP);
+
+  /**
    * <code>VAR_POP</code> aggregate function.
    */
   public static final SqlAggFunction VAR_POP =
@@ -928,6 +935,12 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
    */
   public static final SqlAggFunction VAR_SAMP =
       new SqlAvgAggFunction(SqlKind.VAR_SAMP);
+
+  /**
+   * <code>VARIANCE</code> aggregate function.
+   */
+  public static final SqlAggFunction VARIANCE =
+      new SqlAvgAggFunction("VARIANCE", SqlKind.VAR_SAMP);
 
   //-------------------------------------------------------------
   // WINDOW Aggregate Functions
@@ -1220,11 +1233,6 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
           return SqlOperandCountRanges.between(1, 2);
         }
       };
-
-  /** Internal operator that extracts time periods (year, month, date) from a
-   * date in internal format (number of days since epoch). */
-  public static final SqlSpecialOperator EXTRACT_DATE =
-      new SqlSpecialOperator("EXTRACT_DATE", SqlKind.EXTRACT);
 
   //-------------------------------------------------------------
   //                   FUNCTIONS
@@ -1997,63 +2005,63 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
       };
 
   /** The {@code TUMBLE} group function. */
-  public static final SqlGroupFunction TUMBLE =
-      new SqlGroupFunction(SqlKind.TUMBLE, null,
+  public static final SqlGroupedWindowFunction TUMBLE =
+      new SqlGroupedWindowFunction(SqlKind.TUMBLE, null,
           OperandTypes.or(OperandTypes.DATETIME_INTERVAL,
               OperandTypes.DATETIME_INTERVAL_TIME)) {
-        @Override List<SqlGroupFunction> getAuxiliaryFunctions() {
+        @Override public List<SqlGroupedWindowFunction> getAuxiliaryFunctions() {
           return ImmutableList.of(TUMBLE_START, TUMBLE_END);
         }
       };
 
   /** The {@code TUMBLE_START} auxiliary function of
    * the {@code TUMBLE} group function. */
-  public static final SqlGroupFunction TUMBLE_START =
+  public static final SqlGroupedWindowFunction TUMBLE_START =
       TUMBLE.auxiliary(SqlKind.TUMBLE_START);
 
   /** The {@code TUMBLE_END} auxiliary function of
    * the {@code TUMBLE} group function. */
-  public static final SqlGroupFunction TUMBLE_END =
+  public static final SqlGroupedWindowFunction TUMBLE_END =
       TUMBLE.auxiliary(SqlKind.TUMBLE_END);
 
   /** The {@code HOP} group function. */
-  public static final SqlGroupFunction HOP =
-      new SqlGroupFunction(SqlKind.HOP, null,
+  public static final SqlGroupedWindowFunction HOP =
+      new SqlGroupedWindowFunction(SqlKind.HOP, null,
           OperandTypes.or(OperandTypes.DATETIME_INTERVAL_INTERVAL,
               OperandTypes.DATETIME_INTERVAL_INTERVAL_TIME)) {
-        @Override List<SqlGroupFunction> getAuxiliaryFunctions() {
+        @Override public List<SqlGroupedWindowFunction> getAuxiliaryFunctions() {
           return ImmutableList.of(HOP_START, HOP_END);
         }
       };
 
   /** The {@code HOP_START} auxiliary function of
    * the {@code HOP} group function. */
-  public static final SqlGroupFunction HOP_START =
+  public static final SqlGroupedWindowFunction HOP_START =
       HOP.auxiliary(SqlKind.HOP_START);
 
   /** The {@code HOP_END} auxiliary function of
    * the {@code HOP} group function. */
-  public static final SqlGroupFunction HOP_END =
+  public static final SqlGroupedWindowFunction HOP_END =
       HOP.auxiliary(SqlKind.HOP_END);
 
   /** The {@code SESSION} group function. */
-  public static final SqlGroupFunction SESSION =
-      new SqlGroupFunction(SqlKind.SESSION, null,
+  public static final SqlGroupedWindowFunction SESSION =
+      new SqlGroupedWindowFunction(SqlKind.SESSION, null,
           OperandTypes.or(OperandTypes.DATETIME_INTERVAL,
               OperandTypes.DATETIME_INTERVAL_TIME)) {
-        @Override List<SqlGroupFunction> getAuxiliaryFunctions() {
+        @Override public List<SqlGroupedWindowFunction> getAuxiliaryFunctions() {
           return ImmutableList.of(SESSION_START, SESSION_END);
         }
       };
 
   /** The {@code SESSION_START} auxiliary function of
    * the {@code SESSION} group function. */
-  public static final SqlGroupFunction SESSION_START =
+  public static final SqlGroupedWindowFunction SESSION_START =
       SESSION.auxiliary(SqlKind.SESSION_START);
 
   /** The {@code SESSION_END} auxiliary function of
    * the {@code SESSION} group function. */
-  public static final SqlGroupFunction SESSION_END =
+  public static final SqlGroupedWindowFunction SESSION_END =
       SESSION.auxiliary(SqlKind.SESSION_END);
 
   /** {@code |} operator to create alternate patterns
@@ -2169,7 +2177,7 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
 
   /** Returns the group function for which a given kind is an auxiliary
    * function, or null if it is not an auxiliary function. */
-  public static SqlGroupFunction auxiliaryToGroup(SqlKind kind) {
+  public static SqlGroupedWindowFunction auxiliaryToGroup(SqlKind kind) {
     switch (kind) {
     case TUMBLE_START:
     case TUMBLE_END:
@@ -2192,9 +2200,9 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
    * to {@code TUMBLE(rowtime, INTERVAL '1' HOUR))}. */
   public static SqlCall convertAuxiliaryToGroupCall(SqlCall call) {
     final SqlOperator op = call.getOperator();
-    if (op instanceof SqlGroupFunction
+    if (op instanceof SqlGroupedWindowFunction
         && op.isGroupAuxiliary()) {
-      return copy(call, ((SqlGroupFunction) op).groupFunction);
+      return copy(call, ((SqlGroupedWindowFunction) op).groupFunction);
     }
     return null;
   }
@@ -2204,15 +2212,15 @@ public class SqlStdOperatorTable extends ReflectiveSqlOperatorTable {
    *
    * <p>For example, converts {@code TUMBLE_START(rowtime, INTERVAL '1' HOUR))}
    * to {@code TUMBLE(rowtime, INTERVAL '1' HOUR))}. */
-  public static List<Pair<SqlNode, AuxiliaryConverter>>
-  convertGroupToAuxiliaryCalls(SqlCall call) {
+  public static List<Pair<SqlNode, AuxiliaryConverter>> convertGroupToAuxiliaryCalls(
+      SqlCall call) {
     final SqlOperator op = call.getOperator();
-    if (op instanceof SqlGroupFunction
+    if (op instanceof SqlGroupedWindowFunction
         && op.isGroup()) {
       ImmutableList.Builder<Pair<SqlNode, AuxiliaryConverter>> builder =
           ImmutableList.builder();
-      for (final SqlGroupFunction f
-          : ((SqlGroupFunction) op).getAuxiliaryFunctions()) {
+      for (final SqlGroupedWindowFunction f
+          : ((SqlGroupedWindowFunction) op).getAuxiliaryFunctions()) {
         builder.add(
             Pair.<SqlNode, AuxiliaryConverter>of(copy(call, f),
                 new AuxiliaryConverter.Impl(f)));

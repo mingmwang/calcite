@@ -42,7 +42,7 @@ public class SqlDateLiteral extends SqlAbstractDateTimeLiteral {
     return (DateString) value;
   }
 
-  public SqlNode clone(SqlParserPos pos) {
+  @Override public SqlDateLiteral clone(SqlParserPos pos) {
     return new SqlDateLiteral((DateString) value, pos);
   }
 
@@ -65,14 +65,7 @@ public class SqlDateLiteral extends SqlAbstractDateTimeLiteral {
       SqlWriter writer,
       int leftPrec,
       int rightPrec) {
-    switch (writer.getDialect().getDatabaseProduct()) {
-    case MSSQL:
-      writer.literal("'" + this.toFormattedString() + "'");
-      break;
-    default:
-      writer.literal(this.toString());
-      break;
-    }
+    writer.getDialect().unparseDateTimeLiteral(writer, this, leftPrec, rightPrec);
   }
 }
 

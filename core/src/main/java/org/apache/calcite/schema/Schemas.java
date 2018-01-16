@@ -37,6 +37,7 @@ import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.type.SqlTypeUtil;
+import org.apache.calcite.tools.RelRunner;
 import org.apache.calcite.util.BuiltInMethod;
 import org.apache.calcite.util.Pair;
 
@@ -54,7 +55,6 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.TimeZone;
 
 /**
  * Utility functions for schemas.
@@ -408,6 +408,10 @@ public final class Schemas {
         return schema.root();
       }
 
+      public CalciteSchema getMutableRootSchema() {
+        return getRootSchema();
+      }
+
       public List<String> getDefaultSchemaPath() {
         // schemaPath is usually null. If specified, it overrides schema
         // as the context within which the SQL is validated.
@@ -427,6 +431,10 @@ public final class Schemas {
 
       public DataContext getDataContext() {
         return dataContext;
+      }
+
+      public RelRunner getRelRunner() {
+        throw new UnsupportedOperationException();
       }
 
       public CalcitePrepare.SparkHandler spark() {
@@ -461,8 +469,8 @@ public final class Schemas {
   /** Returns the star tables defined in a schema.
    *
    * @param schema Schema */
-  public static List<CalciteSchema.TableEntry>
-  getStarTables(CalciteSchema schema) {
+  public static List<CalciteSchema.TableEntry> getStarTables(
+      CalciteSchema schema) {
     final List<CalciteSchema.LatticeEntry> list = getLatticeEntries(schema);
     return Lists.transform(list, TO_TABLE_ENTRY);
   }
@@ -564,8 +572,7 @@ public final class Schemas {
     DummyDataContext(CalciteConnection connection, SchemaPlus rootSchema) {
       this.connection = connection;
       this.rootSchema = rootSchema;
-      this.map =
-          ImmutableMap.<String, Object>of("timeZone", TimeZone.getDefault());
+      this.map = ImmutableMap.<String, Object>of();
     }
 
     public SchemaPlus getRootSchema() {

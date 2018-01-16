@@ -30,6 +30,7 @@ import org.apache.calcite.linq4j.function.Deterministic;
 import org.apache.calcite.linq4j.function.Function1;
 import org.apache.calcite.linq4j.function.Function2;
 import org.apache.calcite.linq4j.function.Parameter;
+import org.apache.calcite.linq4j.function.SemiStrict;
 import org.apache.calcite.linq4j.tree.Types;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
@@ -46,8 +47,8 @@ import org.apache.calcite.schema.TranslatableTable;
 import org.apache.calcite.schema.impl.AbstractTable;
 import org.apache.calcite.schema.impl.ViewTable;
 import org.apache.calcite.sql.SqlCall;
-import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.dialect.CalciteSqlDialect;
 import org.apache.calcite.sql.type.SqlTypeName;
 
 import com.google.common.collect.ImmutableList;
@@ -349,6 +350,17 @@ public class Smalls {
         }, "values (1), (3), " + s, ImmutableList.<String>of(), Arrays.asList("view"));
   }
 
+  public static TranslatableTable strView(String s) {
+    return new ViewTable(Object.class,
+        new RelProtoDataType() {
+          public RelDataType apply(RelDataTypeFactory typeFactory) {
+            return typeFactory.builder().add("c", SqlTypeName.VARCHAR, 100)
+                    .build();
+          }
+        }, "values (" + CalciteSqlDialect.DEFAULT.quoteStringLiteral(s) + ")",
+        ImmutableList.<String>of(), Arrays.asList("view"));
+  }
+
   public static TranslatableTable str(Object o, Object p) {
     assertThat(RexLiteral.validConstant(o, Litmus.THROW), is(true));
     assertThat(RexLiteral.validConstant(p, Litmus.THROW), is(true));
@@ -359,8 +371,8 @@ public class Smalls {
                 .build();
           }
         },
-        "values " + SqlDialect.CALCITE.quoteStringLiteral(o.toString())
-            + ", " + SqlDialect.CALCITE.quoteStringLiteral(p.toString()),
+        "values " + CalciteSqlDialect.DEFAULT.quoteStringLiteral(o.toString())
+            + ", " + CalciteSqlDialect.DEFAULT.quoteStringLiteral(p.toString()),
         ImmutableList.<String>of(), Arrays.asList("view"));
   }
 
@@ -439,6 +451,29 @@ public class Smalls {
     }
   }
 
+  /** Example of a semi-strict UDF.
+   * (Returns null if its parameter is null or if its length is 4.) */
+  public static class Null4Function {
+    @SemiStrict public static String eval(@Parameter(name = "s") String s) {
+      if (s == null || s.length() == 4) {
+        return null;
+      }
+      return s;
+    }
+  }
+
+  /** Example of a picky, semi-strict UDF.
+   * Throws {@link NullPointerException} if argument is null.
+   * Returns null if its argument's length is 8. */
+  public static class Null8Function {
+    @SemiStrict public static String eval(@Parameter(name = "s") String s) {
+      if (s.length() == 8) {
+        return null;
+      }
+      return s;
+    }
+  }
+
   /** Example of a UDF with a static {@code eval} method. Class is abstract,
    * but code-generator should not need to instantiate it. */
   public abstract static class MyDoubleFunction {
@@ -508,15 +543,25 @@ public class Smalls {
     private MultipleFunction() {}
 
     // Three overloads
-    public static String fun1(String x) { return x.toLowerCase(Locale.ROOT); }
-    public static int fun1(int x) { return x * 2; }
-    public static int fun1(int x, int y) { return x + y; }
+    public static String fun1(String x) {
+      return x.toLowerCase(Locale.ROOT);
+    }
+    public static int fun1(int x) {
+      return x * 2;
+    }
+    public static int fun1(int x, int y) {
+      return x + y;
+    }
 
     // Another method
-    public static int fun2(int x) { return x * 3; }
+    public static int fun2(int x) {
+      return x * 3;
+    }
 
     // Non-static method cannot be used because constructor is private
-    public int nonStatic(int x) { return x * 3; }
+    public int nonStatic(int x) {
+      return x * 3;
+    }
   }
 
   /** UDF class that provides user-defined functions for each data type. */
@@ -596,7 +641,11 @@ public class Smalls {
     }
   }
 
-  /** A generic interface for defining user defined aggregate functions */
+  /** A generic interface for defining user defined aggregate functions
+   *
+   * @param <A> accumulator type
+   * @param <V> value type
+   * @param <R> result type */
   private interface MyGenericAggFunction<A, V, R> {
     A init();
 
@@ -841,7 +890,7 @@ public class Smalls {
 
     @SuppressWarnings("unused")
     public final WideProductSale[] prod = {
-      new WideProductSale(100, 10)
+        new WideProductSale(100, 10)
     };
   }
 

@@ -42,6 +42,7 @@ import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rel.core.Minus;
 import org.apache.calcite.rel.core.Project;
+import org.apache.calcite.rel.core.RelFactories;
 import org.apache.calcite.rel.core.Sort;
 import org.apache.calcite.rel.core.TableModify;
 import org.apache.calcite.rel.core.Union;
@@ -69,7 +70,6 @@ import org.apache.calcite.rex.RexProgram;
 import org.apache.calcite.schema.ModifiableTable;
 import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.SqlDialect;
-import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Util;
 import org.apache.calcite.util.trace.CalciteTrace;
@@ -95,7 +95,7 @@ public class JdbcRules {
 
   public static List<RelOptRule> rules(JdbcConvention out) {
     return ImmutableList.<RelOptRule>of(
-        new JdbcToEnumerableConverterRule(out),
+        new JdbcToEnumerableConverterRule(out, RelFactories.LOGICAL_BUILDER),
         new JdbcJoinRule(out),
         new JdbcCalcRule(out),
         new JdbcProjectRule(out),
@@ -109,26 +109,11 @@ public class JdbcRules {
         new JdbcValuesRule(out));
   }
 
-  static final ImmutableList<SqlKind> AGG_FUNCS;
-  static final ImmutableList<SqlKind> MYSQL_AGG_FUNCS;
-
-  static {
-    ImmutableList.Builder<SqlKind> builder = ImmutableList.builder();
-    builder.add(SqlKind.COUNT);
-    builder.add(SqlKind.SUM);
-    builder.add(SqlKind.SUM0);
-    builder.add(SqlKind.MIN);
-    builder.add(SqlKind.MAX);
-    AGG_FUNCS = builder.build();
-    builder.add(SqlKind.SINGLE_VALUE);
-    MYSQL_AGG_FUNCS = builder.build();
-  }
-
   /** Abstract base class for rule that converts to JDBC. */
   abstract static class JdbcConverterRule extends ConverterRule {
     protected final JdbcConvention out;
 
-    public JdbcConverterRule(Class<? extends RelNode> clazz, RelTrait in,
+    JdbcConverterRule(Class<? extends RelNode> clazz, RelTrait in,
         JdbcConvention out, String description) {
       super(clazz, in, out, description);
       this.out = out;
@@ -477,12 +462,7 @@ public class JdbcRules {
   /** Returns whether this JDBC data source can implement a given aggregate
    * function. */
   private static boolean canImplement(SqlAggFunction aggregation, SqlDialect sqlDialect) {
-    switch (sqlDialect.getDatabaseProduct()) {
-    case MYSQL:
-      return MYSQL_AGG_FUNCS.contains(aggregation.getKind());
-    default:
-      return AGG_FUNCS.contains(aggregation.getKind());
-    }
+    return sqlDialect.supportsAggregateFunction(aggregation.getKind());
   }
 
   /** Aggregate operator implemented in JDBC convention. */

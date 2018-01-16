@@ -359,6 +359,17 @@ from orders
 window w as (partition by productId)]]>
         </Resource>
     </TestCase>
+    <TestCase name="testArrayOfRecord">
+        <Resource name="sql">
+            <![CDATA[select employees[1].skills[2+3].desc from dept_nested]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(EXPR$0=[DOT(ITEM(DOT(ITEM($2, 1), 'SKILLS'), +(2, 3)), 'DESC')])
+  LogicalTableScan(table=[[CATALOG, SALES, DEPT_NESTED]])
+]]>
+        </Resource>
+    </TestCase>
     <TestCase name="testUnnestArray">
         <Resource name="sql">
             <![CDATA[select*from unnest(array(select*from dept))]]>
@@ -626,23 +637,35 @@ LogicalProject(DEPTNO=[$7])
     <TestCase name="testIsDistinctFrom">
         <Resource name="plan">
             <![CDATA[
-LogicalProject(EXPR$0=[CAST(CASE(IS NULL(1), IS NOT NULL(2), IS NULL(2), IS NOT NULL(1), <>(1, 2))):BOOLEAN NOT NULL])
-  LogicalValues(tuples=[[{ true }]])
+LogicalProject(EXPR$0=[CASE(IS NULL($0), IS NOT NULL($1), IS NULL($1), IS NOT NULL($0), <>(CAST($0):INTEGER NOT NULL, CAST($1):INTEGER NOT NULL))])
+  LogicalUnion(all=[true])
+    LogicalProject(EXPR$0=[null], EXPR$1=[1])
+      LogicalValues(tuples=[[{ 0 }]])
+    LogicalProject(EXPR$0=[2], EXPR$1=[null])
+      LogicalValues(tuples=[[{ 0 }]])
 ]]>
         </Resource>
         <Resource name="sql">
-            <![CDATA[select 1 is distinct from 2 from (values(true))]]>
+            <![CDATA[select empno is distinct from deptno
+from (values (cast(null as int), 1),
+             (2, cast(null as int))) as emp(empno, deptno)]]>
         </Resource>
     </TestCase>
     <TestCase name="testIsNotDistinctFrom">
         <Resource name="plan">
             <![CDATA[
-LogicalProject(EXPR$0=[CAST(CASE(IS NULL(1), IS NULL(2), IS NULL(2), IS NULL(1), =(1, 2))):BOOLEAN NOT NULL])
-  LogicalValues(tuples=[[{ true }]])
+LogicalProject(EXPR$0=[CASE(IS NULL($0), IS NULL($1), IS NULL($1), IS NULL($0), =(CAST($0):INTEGER NOT NULL, CAST($1):INTEGER NOT NULL))])
+  LogicalUnion(all=[true])
+    LogicalProject(EXPR$0=[null], EXPR$1=[1])
+      LogicalValues(tuples=[[{ 0 }]])
+    LogicalProject(EXPR$0=[2], EXPR$1=[null])
+      LogicalValues(tuples=[[{ 0 }]])
 ]]>
         </Resource>
         <Resource name="sql">
-            <![CDATA[select 1 is not distinct from 2 from (values(true))]]>
+            <![CDATA[select empno is not distinct from deptno
+from (values (cast(null as int), 1),
+             (2, cast(null as int))) as emp(empno, deptno)]]>
         </Resource>
     </TestCase>
     <TestCase name="testNotLike">
@@ -879,6 +902,18 @@ LogicalSort(sort0=[$0], dir0=[DESC-nulls-last])
 ]]>
         </Resource>
     </TestCase>
+    <TestCase name="testOrderBasedRepeatFields">
+        <Resource name="sql">
+            <![CDATA[select empno from emp order by empno DESC, empno ASC]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalSort(sort0=[$0], dir0=[DESC])
+  LogicalProject(EMPNO=[$0])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
     <TestCase name="testOrderByAlias">
         <Resource name="sql">
             <![CDATA[select empno + 1 as x, empno - 2 as y from emp order by y]]>
@@ -1063,7 +1098,7 @@ order by sal + empno desc, sal * empno, sal + empno]]>
         <Resource name="plan">
             <![CDATA[
 LogicalProject(EMPNO=[$0])
-  LogicalSort(sort0=[$1], sort1=[$2], sort2=[$1], dir0=[DESC], dir1=[ASC], dir2=[ASC])
+  LogicalSort(sort0=[$1], sort1=[$2], dir0=[DESC], dir1=[ASC])
     LogicalProject(EMPNO=[$0], EXPR$1=[+($5, $0)], EXPR$2=[*($5, $0)])
       LogicalJoin(condition=[true], joinType=[inner])
         LogicalTableScan(table=[[CATALOG, SALES, EMP]])
@@ -1438,6 +1473,19 @@ LogicalSort(sort0=[$0], dir0=[ASC], offset=[10], fetch=[5])
 ]]>
         </Resource>
     </TestCase>
+    <TestCase name="testOrderOffsetFetchWithDynamicParameter">
+        <Resource name="sql">
+            <![CDATA[select empno from emp
+order by empno offset ? rows fetch next ? rows only]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalSort(sort0=[$0], dir0=[ASC], offset=[?0], fetch=[?1])
+  LogicalProject(EMPNO=[$0])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
     <TestCase name="testFetch">
         <Resource name="sql">
             <![CDATA[select empno from emp fetch next 5 rows only]]>
@@ -1445,6 +1493,18 @@ LogicalSort(sort0=[$0], dir0=[ASC], offset=[10], fetch=[5])
         <Resource name="plan">
             <![CDATA[
 LogicalSort(fetch=[5])
+  LogicalProject(EMPNO=[$0])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testFetchWithDynamicParameter">
+        <Resource name="sql">
+            <![CDATA[select empno from emp fetch next ? rows only]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalSort(fetch=[?0])
   LogicalProject(EMPNO=[$0])
     LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
@@ -1463,6 +1523,19 @@ LogicalSort(offset=[10], fetch=[5])
 ]]>
         </Resource>
     </TestCase>
+    <TestCase name="testOffsetFetchWithDynamicParameter">
+        <Resource name="sql">
+            <![CDATA[select empno from emp
+offset ? rows fetch next ? rows only]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalSort(offset=[?0], fetch=[?1])
+  LogicalProject(EMPNO=[$0])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
     <TestCase name="testOffset">
         <Resource name="sql">
             <![CDATA[select empno from emp offset 10 rows]]>
@@ -1470,6 +1543,18 @@ LogicalSort(offset=[10], fetch=[5])
         <Resource name="plan">
             <![CDATA[
 LogicalSort(offset=[10])
+  LogicalProject(EMPNO=[$0])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testOffsetWithDynamicParameter">
+        <Resource name="sql">
+            <![CDATA[select empno from emp offset ? rows]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalSort(offset=[?0])
   LogicalProject(EMPNO=[$0])
     LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
@@ -2001,7 +2086,7 @@ from emp]]>
         </Resource>
         <Resource name="plan">
             <![CDATA[
-LogicalProject(EMPNO=[$0], EXPR$1=[IS FALSE($11)])
+LogicalProject(EMPNO=[$0], EXPR$1=[IS NOT TRUE($11)])
   LogicalJoin(condition=[=($9, $10)], joinType=[left])
     LogicalProject($f0=[$0], $f1=[$1], $f2=[$2], $f3=[$3], $f4=[$4], $f5=[$5], $f6=[$6], $f7=[$7], $f8=[$8], $f9=[$7])
       LogicalTableScan(table=[[CATALOG, SALES, EMP]])
@@ -2034,7 +2119,7 @@ group by "$f2"]]>
         <Resource name="plan">
             <![CDATA[
 LogicalAggregate(group=[{0}], EXPR$1=[MAX($1)], EXPR$2=[MAX($2)])
-  LogicalProject($f2=[$0], EXPR$1=[$1], $f3=[+($1, 1)])
+  LogicalProject($f2=[$0], X=[$1], $f3=[+($1, 1)])
     LogicalValues(tuples=[[{ 1, 2 }]])
 ]]>
         </Resource>
@@ -2174,11 +2259,9 @@ order by 2]]>
         <Resource name="plan">
             <![CDATA[
 LogicalSort(sort0=[$1], dir0=[ASC])
-  LogicalProject(DEPTNO=[$0], ENAME=[$1], EXPR$2=[$4])
-    LogicalProject(DEPTNO=[$0], ENAME=[CASE($3, null, $1)], i$DEPTNO=[$2], i$ENAME=[$3], EXPR$2=[$4])
-      LogicalAggregate(group=[{0, 1}], groups=[[{0, 1}, {0}]], indicator=[true], EXPR$2=[SUM($2)])
-        LogicalProject(DEPTNO=[$7], ENAME=[$1], SAL=[$5])
-          LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+  LogicalAggregate(group=[{0, 1}], groups=[[{0, 1}, {0}]], EXPR$2=[SUM($2)])
+    LogicalProject(DEPTNO=[$7], ENAME=[$1], SAL=[$5])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
         </Resource>
     </TestCase>
@@ -2193,11 +2276,10 @@ group by sal,
         </Resource>
         <Resource name="plan">
             <![CDATA[
-LogicalProject(EXPR$0=[$6])
-  LogicalProject(SAL=[$0], DEPTNO=[CASE($4, null, $1)], ENAME=[CASE($5, null, $2)], i$SAL=[$3], i$DEPTNO=[$4], i$ENAME=[$5], EXPR$0=[$6])
-    LogicalAggregate(group=[{0, 1, 2}], groups=[[{0, 1, 2}, {0, 1}, {0, 2}]], indicator=[true], EXPR$0=[SUM($0)])
-      LogicalProject(SAL=[$5], DEPTNO=[$7], ENAME=[$1])
-        LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+LogicalProject(EXPR$0=[$3])
+  LogicalAggregate(group=[{0, 1, 2}], groups=[[{0, 1, 2}, {0, 1}, {0, 2}]], EXPR$0=[SUM($0)])
+    LogicalProject(SAL=[$5], DEPTNO=[$7], ENAME=[$1])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
         </Resource>
     </TestCase>
@@ -2210,9 +2292,8 @@ group by grouping sets (a, b), grouping sets (c, d)]]>
         <Resource name="plan">
             <![CDATA[
 LogicalProject(EXPR$0=[1])
-  LogicalProject(EXPR$0=[CASE($4, null, $0)], EXPR$1=[CASE($5, null, $1)], EXPR$2=[CASE($6, null, $2)], EXPR$3=[CASE($7, null, $3)], i$EXPR$0=[$4], i$EXPR$1=[$5], i$EXPR$2=[$6], i$EXPR$3=[$7])
-    LogicalAggregate(group=[{0, 1, 2, 3}], groups=[[{0, 2}, {0, 3}, {1, 2}, {1, 3}]], indicator=[true])
-      LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
+  LogicalAggregate(group=[{0, 1, 2, 3}], groups=[[{0, 2}, {0, 3}, {1, 2}, {1, 3}]])
+    LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
 ]]>
         </Resource>
     </TestCase>
@@ -2225,9 +2306,8 @@ group by grouping sets (a, (a, b)), grouping sets (c), d]]>
         <Resource name="plan">
             <![CDATA[
 LogicalProject(EXPR$0=[1])
-  LogicalProject(EXPR$0=[$0], EXPR$1=[CASE($5, null, $1)], EXPR$2=[$2], EXPR$3=[$3], i$EXPR$0=[$4], i$EXPR$1=[$5], i$EXPR$2=[$6], i$EXPR$3=[$7])
-    LogicalAggregate(group=[{0, 1, 2, 3}], groups=[[{0, 1, 2, 3}, {0, 2, 3}]], indicator=[true])
-      LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
+  LogicalAggregate(group=[{0, 1, 2, 3}], groups=[[{0, 1, 2, 3}, {0, 2, 3}]])
+    LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
 ]]>
         </Resource>
     </TestCase>
@@ -2240,9 +2320,8 @@ group by rollup(a, b), rollup(c, d)]]>
         <Resource name="plan">
             <![CDATA[
 LogicalProject(EXPR$0=[1])
-  LogicalProject(EXPR$0=[CASE($4, null, $0)], EXPR$1=[CASE($5, null, $1)], EXPR$2=[CASE($6, null, $2)], EXPR$3=[CASE($7, null, $3)], i$EXPR$0=[$4], i$EXPR$1=[$5], i$EXPR$2=[$6], i$EXPR$3=[$7])
-    LogicalAggregate(group=[{0, 1, 2, 3}], groups=[[{0, 1, 2, 3}, {0, 1, 2}, {0, 1}, {0, 2, 3}, {0, 2}, {0}, {2, 3}, {2}, {}]], indicator=[true])
-      LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
+  LogicalAggregate(group=[{0, 1, 2, 3}], groups=[[{0, 1, 2, 3}, {0, 1, 2}, {0, 1}, {0, 2, 3}, {0, 2}, {0}, {2, 3}, {2}, {}]])
+    LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
 ]]>
         </Resource>
     </TestCase>
@@ -2255,10 +2334,9 @@ group by cube(a, b)]]>
         <Resource name="plan">
             <![CDATA[
 LogicalProject(EXPR$0=[1])
-  LogicalProject(EXPR$0=[CASE($2, null, $0)], EXPR$1=[CASE($3, null, $1)], i$EXPR$0=[$2], i$EXPR$1=[$3])
-    LogicalAggregate(group=[{0, 1}], groups=[[{0, 1}, {0}, {1}, {}]], indicator=[true])
-      LogicalProject(EXPR$0=[$0], EXPR$1=[$1])
-        LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
+  LogicalAggregate(group=[{0, 1}], groups=[[{0, 1}, {0}, {1}, {}]])
+    LogicalProject(A=[$0], B=[$1])
+      LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
 ]]>
         </Resource>
     </TestCase>
@@ -2271,10 +2349,9 @@ group by rollup(b, (a, d))]]>
         <Resource name="plan">
             <![CDATA[
 LogicalProject(EXPR$0=[1])
-  LogicalProject(EXPR$1=[CASE($3, null, $0)], EXPR$0=[CASE($4, null, $1)], EXPR$3=[CASE($5, null, $2)], i$EXPR$1=[$3], i$EXPR$0=[$4], i$EXPR$3=[$5])
-    LogicalAggregate(group=[{0, 1, 2}], groups=[[{0, 1, 2}, {0}, {}]], indicator=[true])
-      LogicalProject(EXPR$1=[$1], EXPR$0=[$0], EXPR$3=[$3])
-        LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
+  LogicalAggregate(group=[{0, 1, 2}], groups=[[{0, 1, 2}, {0}, {}]])
+    LogicalProject(B=[$1], A=[$0], D=[$3])
+      LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
 ]]>
         </Resource>
     </TestCase>
@@ -2287,9 +2364,8 @@ group by rollup(a, b), rollup(c, d)]]>
         <Resource name="plan">
             <![CDATA[
 LogicalProject(EXPR$0=[1])
-  LogicalProject(EXPR$0=[CASE($4, null, $0)], EXPR$1=[CASE($5, null, $1)], EXPR$2=[CASE($6, null, $2)], EXPR$3=[CASE($7, null, $3)], i$EXPR$0=[$4], i$EXPR$1=[$5], i$EXPR$2=[$6], i$EXPR$3=[$7])
-    LogicalAggregate(group=[{0, 1, 2, 3}], groups=[[{0, 1, 2, 3}, {0, 1, 2}, {0, 1}, {0, 2, 3}, {0, 2}, {0}, {2, 3}, {2}, {}]], indicator=[true])
-      LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
+  LogicalAggregate(group=[{0, 1, 2, 3}], groups=[[{0, 1, 2, 3}, {0, 1, 2}, {0, 1}, {0, 2, 3}, {0, 2}, {0}, {2, 3}, {2}, {}]])
+    LogicalValues(tuples=[[{ 1, 2, 3, 4 }]])
 ]]>
         </Resource>
     </TestCase>
@@ -2301,11 +2377,9 @@ group by rollup(a, b)]]>
         </Resource>
         <Resource name="plan">
             <![CDATA[
-LogicalProject(A=[$0], B=[$1], C=[$4])
-  LogicalProject(A=[CASE($2, null, $0)], B=[CASE($3, null, $1)], i$A=[$2], i$B=[$3], C=[$4])
-    LogicalAggregate(group=[{0, 1}], groups=[[{0, 1}, {0}, {}]], indicator=[true], C=[COUNT()])
-      LogicalProject(A=[null], B=[2])
-        LogicalValues(tuples=[[{ 0 }]])
+LogicalAggregate(group=[{0, 1}], groups=[[{0, 1}, {0}, {}]], C=[COUNT()])
+  LogicalProject(A=[null], B=[2])
+    LogicalValues(tuples=[[{ 0 }]])
 ]]>
         </Resource>
     </TestCase>
@@ -2333,9 +2407,8 @@ group by grouping sets ((a, b), c), grouping sets ((x, y), ())]]>
         <Resource name="plan">
             <![CDATA[
 LogicalProject(EXPR$0=[1])
-  LogicalProject(EXPR$0=[CASE($5, null, $0)], EXPR$1=[CASE($6, null, $1)], EXPR$2=[CASE($7, null, $2)], EXPR$3=[CASE($8, null, $3)], EXPR$4=[CASE($9, null, $4)], i$EXPR$0=[$5], i$EXPR$1=[$6], i$EXPR$2=[$7], i$EXPR$3=[$8], i$EXPR$4=[$9])
-    LogicalAggregate(group=[{0, 1, 2, 3, 4}], groups=[[{0, 1, 3, 4}, {0, 1}, {2, 3, 4}, {2}]], indicator=[true])
-      LogicalValues(tuples=[[{ 0, 1, 2, 3, 4 }]])
+  LogicalAggregate(group=[{0, 1, 2, 3, 4}], groups=[[{0, 1, 3, 4}, {0, 1}, {2, 3, 4}, {2}]])
+    LogicalValues(tuples=[[{ 0, 1, 2, 3, 4 }]])
 ]]>
         </Resource>
     </TestCase>
@@ -2350,8 +2423,8 @@ order by 2]]>
         <Resource name="plan">
             <![CDATA[
 LogicalSort(sort0=[$1], dir0=[ASC])
-  LogicalProject(DEPTNO=[$1], EXPR$1=[1], EXPR$2=[$2], EXPR$3=[1])
-    LogicalAggregate(group=[{0, 1}], EXPR$2=[COUNT()])
+  LogicalProject(DEPTNO=[$1], EXPR$1=[$2], EXPR$2=[$3], EXPR$3=[$4])
+    LogicalAggregate(group=[{0, 1}], EXPR$1=[GROUPING($1)], EXPR$2=[COUNT()], EXPR$3=[GROUPING($0)])
       LogicalProject(EMPNO=[$0], DEPTNO=[$7])
         LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
@@ -2366,11 +2439,219 @@ group by rollup(empno, deptno)]]>
         </Resource>
         <Resource name="plan">
             <![CDATA[
-LogicalProject(DEPTNO=[$1], EXPR$1=[CASE($3, 1, 0)], EXPR$2=[$4], EXPR$3=[CASE($2, 1, 0)])
-  LogicalProject(EMPNO=[CASE($2, null, $0)], DEPTNO=[CASE($3, null, $1)], i$EMPNO=[$2], i$DEPTNO=[$3], EXPR$2=[$4])
-    LogicalAggregate(group=[{0, 1}], groups=[[{0, 1}, {0}, {}]], indicator=[true], EXPR$2=[COUNT()])
-      LogicalProject(EMPNO=[$0], DEPTNO=[$7])
-        LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+LogicalProject(DEPTNO=[$1], EXPR$1=[$2], EXPR$2=[$3], EXPR$3=[$4])
+  LogicalAggregate(group=[{0, 1}], groups=[[{0, 1}, {0}, {}]], EXPR$1=[GROUPING($1)], EXPR$2=[COUNT()], EXPR$3=[GROUPING($0)])
+    LogicalProject(EMPNO=[$0], DEPTNO=[$7])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testMatchRecognize1">
+        <Resource name="sql">
+            <![CDATA[select *
+  from emp match_recognize
+  (
+    partition by job, sal
+    order by job asc, sal desc, empno
+    pattern (strt down+ up+)
+    define
+      down as down.mgr < PREV(down.mgr),
+      up as up.mgr > prev(up.mgr)) as mr]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8])
+  LogicalMatch(partition=[[$2, $5]], order=[[2, 5 DESC, 0]], outputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), >(PREV(UP.$3, 0), PREV(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testMatchRecognizeMeasures1">
+        <Resource name="sql">
+            <![CDATA[select *
+from emp match_recognize (
+  partition by job, sal
+  order by job asc, sal desc
+  measures MATCH_NUMBER() as match_num,
+    CLASSIFIER() as var_match,
+    STRT.mgr as start_nw,
+    LAST(DOWN.mgr) as bottom_nw,
+    LAST(up.mgr) as end_nw
+  pattern (strt down+ up+)
+  define
+    down as down.mgr < PREV(down.mgr),
+    up as up.mgr > prev(up.mgr)) as mr]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(JOB=[$0], SAL=[$1], MATCH_NUM=[$2], VAR_MATCH=[$3], START_NW=[$4], BOTTOM_NW=[$5], END_NW=[$6])
+  LogicalMatch(partition=[[$2, $5]], order=[[2, 5 DESC]], outputFields=[[JOB, SAL, MATCH_NUM, VAR_MATCH, START_NW, BOTTOM_NW, END_NW]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), >(PREV(UP.$3, 0), PREV(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testMatchRecognizeMeasures2">
+        <Resource name="sql">
+            <![CDATA[select *
+from emp match_recognize (
+  partition by job
+  order by sal
+  measures MATCH_NUMBER() as match_num,
+    CLASSIFIER() as var_match,
+    STRT.mgr as start_nw,
+    LAST(DOWN.mgr) as bottom_nw,
+    LAST(up.mgr) as end_nw
+  pattern (strt down+ up+)
+  define
+    down as down.mgr < PREV(down.mgr),
+    up as up.mgr > prev(up.mgr)) as mr]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(JOB=[$0], MATCH_NUM=[$1], VAR_MATCH=[$2], START_NW=[$3], BOTTOM_NW=[$4], END_NW=[$5])
+  LogicalMatch(partition=[[$2]], order=[[5]], outputFields=[[JOB, MATCH_NUM, VAR_MATCH, START_NW, BOTTOM_NW, END_NW]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), >(PREV(UP.$3, 0), PREV(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testMatchRecognizeMeasures3">
+        <Resource name="sql">
+            <![CDATA[select *
+from emp match_recognize (
+  partition by job
+  order by sal
+  measures MATCH_NUMBER() as match_num,
+    CLASSIFIER() as var_match,
+    STRT.mgr as start_nw,
+    LAST(DOWN.mgr) as bottom_nw,
+    LAST(up.mgr) as end_nw
+  ALL ROWS PER MATCH
+  pattern (strt down+ up+)
+  define
+    down as down.mgr < PREV(down.mgr),
+    up as up.mgr > prev(up.mgr)) as mr]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(JOB=[$0], SAL=[$1], EMPNO=[$2], ENAME=[$3], MGR=[$4], HIREDATE=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8], MATCH_NUM=[$9], VAR_MATCH=[$10], START_NW=[$11], BOTTOM_NW=[$12], END_NW=[$13])
+  LogicalMatch(partition=[[$2]], order=[[5]], outputFields=[[JOB, SAL, EMPNO, ENAME, MGR, HIREDATE, COMM, DEPTNO, SLACKER, MATCH_NUM, VAR_MATCH, START_NW, BOTTOM_NW, END_NW]], allRows=[true], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), >(PREV(UP.$3, 0), PREV(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testMatchRecognizePatternSkip1">
+        <Resource name="sql">
+            <![CDATA[select *
+  from emp match_recognize
+  (
+    after match skip to next row
+    pattern (strt down+ up+)
+    define
+      down as down.mgr < PREV(down.mgr),
+      up as up.mgr > NEXT(up.mgr)
+  ) mr]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8])
+  LogicalMatch(partition=[[]], order=[[]], outputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), >(PREV(UP.$3, 0), NEXT(PREV(UP.$3, 0), 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testMatchRecognizePrevDown">
+        <Resource name="sql">
+            <![CDATA[SELECT *
+FROM emp
+MATCH_RECOGNIZE (
+  MEASURES
+    STRT.mgr AS start_mgr,
+    LAST(DOWN.mgr) AS up_days,
+    LAST(UP.mgr) AS total_days
+  PATTERN (STRT DOWN+ UP+)
+  DEFINE
+    DOWN AS DOWN.mgr < PREV(DOWN.mgr),
+    UP AS UP.mgr > PREV(DOWN.mgr)
+) AS T]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(START_MGR=[$0], UP_DAYS=[$1], TOTAL_DAYS=[$2])
+  LogicalMatch(partition=[[]], order=[[]], outputFields=[[START_MGR, UP_DAYS, TOTAL_DAYS]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), >(PREV(UP.$3, 0), LAST(DOWN.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testMatchRecognizePrevLast">
+        <Resource name="sql">
+            <![CDATA[SELECT *
+FROM emp
+MATCH_RECOGNIZE (
+  MEASURES
+    STRT.mgr AS start_mgr,
+    LAST(DOWN.mgr) AS bottom_mgr,
+    LAST(UP.mgr) AS end_mgr
+  ONE ROW PER MATCH
+  PATTERN (STRT DOWN+ UP+)
+  DEFINE
+    DOWN AS DOWN.mgr < PREV(DOWN.mgr),
+    UP AS UP.mgr > PREV(LAST(DOWN.mgr, 1), 1)
+) AS T]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(START_MGR=[$0], BOTTOM_MGR=[$1], END_MGR=[$2])
+  LogicalMatch(partition=[[]], order=[[]], outputFields=[[START_MGR, BOTTOM_MGR, END_MGR]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), >(PREV(UP.$3, 0), PREV(LAST(DOWN.$3, 1), 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testMatchRecognizeSubset1">
+        <Resource name="sql">
+            <![CDATA[select *
+  from emp match_recognize
+  (
+    after match skip to down
+    pattern (strt down+ up+)
+    subset stdn = (strt, down)
+    define
+      down as down.mgr < PREV(down.mgr),
+      up as up.mgr > NEXT(up.mgr)
+  ) mr]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8])
+  LogicalMatch(partition=[[]], order=[[]], outputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]], allRows=[false], after=[SKIP TO LAST('DOWN')], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[[DOWN, STRT]]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), >(PREV(UP.$3, 0), NEXT(PREV(UP.$3, 0), 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testPrevClassifier">
+        <Resource name="sql">
+            <![CDATA[SELECT *
+FROM emp
+MATCH_RECOGNIZE (
+  MEASURES
+    STRT.mgr AS start_mgr,
+    LAST(DOWN.mgr) AS up_days,
+    LAST(UP.mgr) AS total_days
+  PATTERN (STRT DOWN? UP+)
+  DEFINE
+    DOWN AS DOWN.mgr < PREV(DOWN.mgr),
+    UP AS CASE
+            WHEN PREV(CLASSIFIER()) = 'STRT'
+              THEN UP.mgr > 15
+            ELSE
+              UP.mgr > 20
+            END
+) AS T]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(START_MGR=[$0], UP_DAYS=[$1], TOTAL_DAYS=[$2])
+  LogicalMatch(partition=[[]], order=[[]], outputFields=[[START_MGR, UP_DAYS, TOTAL_DAYS]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 0, 1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(PREV(DOWN.$3, 0), PREV(DOWN.$3, 1)), CASE(=(PREV(CLASSIFIER(), 1), 'STRT'), >(PREV(UP.$3, 0), 15), >(PREV(UP.$3, 0), 20))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
         </Resource>
     </TestCase>
@@ -2524,9 +2805,10 @@ GROUP BY empno, EXPR$2]]>
         </Resource>
         <Resource name="plan">
             <![CDATA[
-LogicalAggregate(group=[{0, 1}], EXPR$2=[COUNT()])
-  LogicalProject(EMPNO=[$0], EXPR$2=[$7])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+LogicalProject(EMPNO=[$0], EXPR$2=[$1], EXPR$20=[$2])
+  LogicalAggregate(group=[{0, 1}], EXPR$2=[COUNT()])
+    LogicalProject(EMPNO=[$0], EXPR$2=[$7])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
         </Resource>
     </TestCase>
@@ -2646,9 +2928,32 @@ group by hop(rowtime, interval '1' hour, interval '3' hour)]]>
         <Resource name="plan">
             <![CDATA[
 LogicalDelta
-  LogicalAggregate(group=[{0}], C=[COUNT()])
-    LogicalProject($f0=[HOP($0, 3600000, 10800000)])
-      LogicalTableScan(table=[[CATALOG, SALES, ORDERS]])
+  LogicalProject(ROWTIME=[$0], C=[$1])
+    LogicalAggregate(group=[{0}], C=[COUNT()])
+      LogicalProject($f0=[HOP($0, 3600000, 10800000)])
+        LogicalTableScan(table=[[CATALOG, SALES, ORDERS]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testNotInWithLiteral">
+        <Resource name="sql">
+            <![CDATA[SELECT *
+FROM SALES.NATION
+WHERE n_name NOT IN
+    (SELECT ''
+     FROM SALES.NATION)]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(**=[$1])
+  LogicalFilter(condition=[NOT(AND(IS TRUE($4), IS NOT NULL($2)))])
+    LogicalJoin(condition=[=($2, $3)], joinType=[left])
+      LogicalProject($f0=[$0], $f1=[$1], $f2=[$0])
+        LogicalTableScan(table=[[CATALOG, SALES, NATION]])
+      LogicalAggregate(group=[{0}], agg#0=[MIN($1)])
+        LogicalProject($f0=[$0], $f1=[true])
+          LogicalProject(EXPR$0=[''])
+            LogicalTableScan(table=[[CATALOG, SALES, NATION]])
 ]]>
         </Resource>
     </TestCase>
@@ -2696,6 +3001,21 @@ group by deptno]]>
             <![CDATA[
 LogicalAggregate(group=[{0}], EXPR$1=[SUM($1) FILTER $2], EXPR$2=[COUNT()])
   LogicalProject(DEPTNO=[$7], $f1=[*($5, 2)], $f2=[<($0, 10)])
+    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testAggFilterWithIn">
+        <Resource name="sql">
+            <![CDATA[select
+  deptno, sum(sal * 2) filter (where empno not in (1, 2)), count(*)
+from emp
+group by deptno]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalAggregate(group=[{0}], EXPR$1=[SUM($1) FILTER $2], EXPR$2=[COUNT()])
+  LogicalProject(DEPTNO=[$7], $f1=[*($5, 2)], $f2=[AND(<>($0, 1), <>($0, 2))])
     LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
         </Resource>
@@ -3440,7 +3760,7 @@ group by d.deptno]]>
         <Resource name="plan">
             <![CDATA[
 LogicalAggregate(group=[{0}], EMPID=[MIN($1)])
-  LogicalProject(DEPTNO=[$3], EXPR$0=[$0])
+  LogicalProject(DEPTNO=[$3], EMPID=[$0])
     LogicalJoin(condition=[=($2, $3)], joinType=[inner])
       LogicalValues(tuples=[[{ 100, 'Bill', 1 }]])
       LogicalValues(tuples=[[{ 1, 'LeaderShip' }]])
@@ -3705,6 +4025,19 @@ LogicalTableModify(table=[[CATALOG, SALES, EMP]], operation=[UPDATE], updateColu
             <![CDATA[
 LogicalTableModify(table=[[CATALOG, SALES, EMP]], operation=[UPDATE], updateColumnList=[[SAL]], sourceExpressionList=[[+($cor0.SAL, ?0)]], flattened=[true])
   LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8], EXPR$0=[+($5, ?0)])
+    LogicalFilter(condition=[=($8, false)])
+      LogicalTableScan(table=[[CATALOG, SALES, EMP]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testUpdateBind2">
+        <Resource name="sql">
+            <![CDATA[update emp set sal = ? where slacker = false]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalTableModify(table=[[CATALOG, SALES, EMP]], operation=[UPDATE], updateColumnList=[[SAL]], sourceExpressionList=[[?0]], flattened=[true])
+  LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8], EXPR$0=[?0])
     LogicalFilter(condition=[=($8, false)])
       LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
@@ -4672,7 +5005,7 @@ LogicalProject(R_REGIONKEY=[$0], R_NAME=[$1], R_COMMENT=[$2])
 ]]>
         </Resource>
     </TestCase>
-    <TestCase name="testSelStarOrderBy">
+    <TestCase name="testSelectDynamicStarOrderBy">
         <Resource name="sql">
             <![CDATA[SELECT * from SALES.NATION order by n_nationkey]]>
         </Resource>
@@ -4687,7 +5020,9 @@ LogicalProject(**=[$0])
     </TestCase>
     <TestCase name="testInToSemiJoin">
         <Resource name="sql">
-            <![CDATA[SELECT empno FROM emp AS e WHERE cast(e.empno as bigint) in (130, 131, 132, 133, 134)]]>
+            <![CDATA[SELECT empno
+FROM emp AS e
+WHERE cast(e.empno as bigint) in (130, 131, 132, 133, 134)]]>
         </Resource>
         <Resource name="planNotConverted">
             <![CDATA[
@@ -4704,6 +5039,20 @@ LogicalProject(EMPNO=[$0])
       LogicalTableScan(table=[[CATALOG, SALES, EMP]])
     LogicalAggregate(group=[{0}])
       LogicalValues(tuples=[[{ 130 }, { 131 }, { 132 }, { 133 }, { 134 }]])
+]]>
+        </Resource>
+    </TestCase>
+    <TestCase name="testWindowOnDynamicStar">
+        <Resource name="sql">
+            <![CDATA[SELECT SUM(n_nationkey) OVER w
+FROM (SELECT * FROM SALES.NATION) subQry
+WINDOW w AS (PARTITION BY REGION ORDER BY n_nationkey)]]>
+        </Resource>
+        <Resource name="plan">
+            <![CDATA[
+LogicalProject(EXPR$0=[CASE(>(COUNT(ITEM($0, 'N_NATIONKEY')) OVER (PARTITION BY ITEM($0, 'REGION') ORDER BY ITEM($0, 'N_NATIONKEY') RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 0), $SUM0(ITEM($0, 'N_NATIONKEY')) OVER (PARTITION BY ITEM($0, 'REGION') ORDER BY ITEM($0, 'N_NATIONKEY') RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), null)])
+  LogicalProject(**=[$0])
+    LogicalTableScan(table=[[CATALOG, SALES, NATION]])
 ]]>
         </Resource>
     </TestCase>
@@ -4726,180 +5075,6 @@ LogicalProject(A=[$0], B=[$1])
             LogicalProject(EXPR$0=[1])
               LogicalFilter(condition=[=($7, $cor0.A)])
                 LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-]]>
-        </Resource>
-    </TestCase>
-    <TestCase name="testMatchRecognize1">
-        <Resource name="sql">
-            <![CDATA[select *
-  from emp match_recognize
-  (
-    partition by job, sal
-    order by job asc, sal desc, empno
-    pattern (strt down+ up+)
-    define
-      down as down.mgr < PREV(down.mgr),
-      up as up.mgr > prev(up.mgr)
-  ) mr]]>
-        </Resource>
-        <Resource name="plan">
-            <![CDATA[
-LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8])
-  LogicalMatch(partition=[[$2, $5]], order=[[2, 5 DESC, 0]], outputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(DOWN.$3, PREV(DOWN.$3, 1)), >(UP.$3, PREV(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-]]>
-        </Resource>
-    </TestCase>
-    <TestCase name="testMatchRecognizeMeasures1">
-        <Resource name="sql">
-            <![CDATA[select *
-  from emp match_recognize
-  (
-   partition by job, sal
-   order by job asc, sal desc
-   measures STRT.mgr as start_nw,   LAST(DOWN.mgr) as bottom_nw,   LAST(up.mgr) as end_nw    pattern (strt down+ up+)
-    define
-      down as down.mgr < PREV(down.mgr),
-      up as up.mgr > prev(up.mgr)
-  ) mr]]>
-        </Resource>
-        <Resource name="plan">
-            <![CDATA[
-LogicalProject(JOB=[$0], SAL=[$1], MATCH_NUM=[$2], VAR_MATCH=[$3], START_NW=[$4], BOTTOM_NW=[$5], END_NW=[$6])
-  LogicalMatch(partition=[[$2, $5]], order=[[2, 5 DESC]], outputFields=[[JOB, SAL, MATCH_NUM, VAR_MATCH, START_NW, BOTTOM_NW, END_NW]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(DOWN.$3, PREV(DOWN.$3, 1)), >(UP.$3, PREV(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-]]>
-        </Resource>
-    </TestCase>
-    <TestCase name="testMatchRecognizeMeasures2">
-        <Resource name="sql">
-            <![CDATA[select *
-  from emp match_recognize
-  (
-   partition by job
-   order by sal
-   measures STRT.mgr as start_nw,   LAST(DOWN.mgr) as bottom_nw,   LAST(up.mgr) as end_nw    pattern (strt down+ up+)
-    define
-      down as down.mgr < PREV(down.mgr),
-      up as up.mgr > prev(up.mgr)
-  ) mr]]>
-        </Resource>
-        <Resource name="plan">
-            <![CDATA[
-LogicalProject(JOB=[$0], MATCH_NUM=[$1], VAR_MATCH=[$2], START_NW=[$3], BOTTOM_NW=[$4], END_NW=[$5])
-  LogicalMatch(partition=[[$2]], order=[[5]], outputFields=[[JOB, MATCH_NUM, VAR_MATCH, START_NW, BOTTOM_NW, END_NW]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(DOWN.$3, PREV(DOWN.$3, 1)), >(UP.$3, PREV(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-]]>
-        </Resource>
-    </TestCase>
-    <TestCase name="testMatchRecognizeMeasures3">
-        <Resource name="sql">
-            <![CDATA[select *
-  from emp match_recognize
-  (
-   partition by job
-   order by sal
-   measures STRT.mgr as start_nw,   LAST(DOWN.mgr) as bottom_nw,   LAST(up.mgr) as end_nw
-   ALL ROWS PER MATCH
-   pattern (strt down+ up+)
-    define
-      down as down.mgr < PREV(down.mgr),
-      up as up.mgr > prev(up.mgr)
-  ) mr]]>
-        </Resource>
-        <Resource name="plan">
-            <![CDATA[
-LogicalProject(JOB=[$0], SAL=[$1], EMPNO=[$2], ENAME=[$3], MGR=[$4], HIREDATE=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8], MATCH_NUM=[$9], VAR_MATCH=[$10], START_NW=[$11], BOTTOM_NW=[$12], END_NW=[$13])
-  LogicalMatch(partition=[[$2]], order=[[5]], outputFields=[[JOB, SAL, EMPNO, ENAME, MGR, HIREDATE, COMM, DEPTNO, SLACKER, MATCH_NUM, VAR_MATCH, START_NW, BOTTOM_NW, END_NW]], allRows=[true], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(DOWN.$3, PREV(DOWN.$3, 1)), >(UP.$3, PREV(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-]]>
-        </Resource>
-    </TestCase>
-    <TestCase name="testMatchRecognizePatternSkip1">
-        <Resource name="sql">
-            <![CDATA[select *
-  from emp match_recognize
-  (
-    after match skip to next row
-    pattern (strt down+ up+)
-    define
-      down as down.mgr < PREV(down.mgr),
-      up as up.mgr > NEXT(up.mgr)
-  ) mr]]>
-        </Resource>
-        <Resource name="plan">
-            <![CDATA[
-LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8])
-  LogicalMatch(partition=[[]], order=[[]], outputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(DOWN.$3, PREV(DOWN.$3, 1)), >(UP.$3, NEXT(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-]]>
-        </Resource>
-    </TestCase>
-    <TestCase name="testMatchRecognizeSubset1">
-        <Resource name="sql">
-            <![CDATA[select *
-  from emp match_recognize
-  (
-    after match skip to down
-    pattern (strt down+ up+)
-    subset stdn = (strt, down)
-    define
-      down as down.mgr < PREV(down.mgr),
-      up as up.mgr > NEXT(up.mgr)
-  ) mr]]>
-        </Resource>
-        <Resource name="plan">
-            <![CDATA[
-LogicalProject(EMPNO=[$0], ENAME=[$1], JOB=[$2], MGR=[$3], HIREDATE=[$4], SAL=[$5], COMM=[$6], DEPTNO=[$7], SLACKER=[$8])
-  LogicalMatch(partition=[[]], order=[[]], outputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]], allRows=[false], after=[SKIP TO LAST('DOWN')], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[[DOWN, STRT]]], patternDefinitions=[[<(DOWN.$3, PREV(DOWN.$3, 1)), >(UP.$3, NEXT(UP.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-]]>
-        </Resource>
-    </TestCase>
-    <TestCase name="testMRPrevLast">
-        <Resource name="sql">
-            <![CDATA[SELECT *
-FROM emp
-MATCH_RECOGNIZE (
-  MEASURES
-    STRT.mgr AS start_mgr,
-    LAST(DOWN.mgr) AS bottom_mgr,
-    LAST(UP.mgr) AS end_mgr
-  ONE ROW PER MATCH\n
-  PATTERN (STRT DOWN+ UP+)
-  DEFINE
-    DOWN AS DOWN.mgr < PREV(DOWN.mgr),
-    UP AS UP.mgr > PREV(LAST(DOWN.mgr, 1), 1)
-) AS T;]]>
-        </Resource>
-        <Resource name="plan">
-            <![CDATA[
-LogicalProject(START_MGR=[$0], BOTTOM_MGR=[$1], END_MGR=[$2])
-  LogicalMatch(partition=[[]], order=[[]], outputFields=[[START_MGR, BOTTOM_MGR, END_MGR]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(DOWN.$3, PREV(DOWN.$3, 1)), >(UP.$3, PREV(LAST(DOWN.$3, 1), 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
-]]>
-        </Resource>
-    </TestCase>
-    <TestCase name="testMRPrevDown">
-        <Resource name="sql">
-            <![CDATA[SELECT *
-FROM tmp
-MATCH_RECOGNIZE (
-  MEASURES
-    STRT.mgr AS start_mgr,
-    LAST(DOWN.mgr) AS up_days,
-    LAST(UP.mgr) AS total_days
-  PATTERN (STRT DOWN+ UP+)
-  DEFINE
-    DOWN AS DOWN.mgr < PREV(DOWN.mgr),
-    UP AS UP.mgr > PREV(DOWN.mgr)
-) AS T]]>
-        </Resource>
-        <Resource name="plan">
-            <![CDATA[
-LogicalProject(START_MGR=[$0], UP_DAYS=[$1], TOTAL_DAYS=[$2])
-  LogicalMatch(partition=[[]], order=[[]], outputFields=[[START_MGR, UP_DAYS, TOTAL_DAYS]], allRows=[false], after=[FLAG(SKIP TO NEXT ROW)], pattern=[(('STRT', PATTERN_QUANTIFIER('DOWN', 1, -1, false)), PATTERN_QUANTIFIER('UP', 1, -1, false))], isStrictStarts=[false], isStrictEnds=[false], subsets=[[]], patternDefinitions=[[<(DOWN.$3, PREV(DOWN.$3, 1)), >(UP.$3, PREV(DOWN.$3, 1))]], inputFields=[[EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, COMM, DEPTNO, SLACKER]])
-    LogicalTableScan(table=[[CATALOG, SALES, EMP]])
 ]]>
         </Resource>
     </TestCase>

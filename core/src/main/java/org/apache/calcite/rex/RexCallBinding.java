@@ -81,8 +81,12 @@ public class RexCallBinding extends SqlOperatorBinding {
     return RexLiteral.intValue(operands.get(ordinal));
   }
 
-  @Override public Comparable getOperandLiteralValue(int ordinal) {
-    return RexLiteral.value(operands.get(ordinal));
+  @Override public <T> T getOperandLiteralValue(int ordinal, Class<T> clazz) {
+    final RexNode node = operands.get(ordinal);
+    if (node instanceof RexLiteral) {
+      return ((RexLiteral) node).getValueAs(clazz);
+    }
+    return clazz.cast(RexLiteral.value(node));
   }
 
   @Override public SqlMonotonicity getOperandMonotonicity(int ordinal) {
@@ -138,7 +142,7 @@ public class RexCallBinding extends SqlOperatorBinding {
   private static class RexCastCallBinding extends RexCallBinding {
     private final RelDataType type;
 
-    public RexCastCallBinding(
+    RexCastCallBinding(
         RelDataTypeFactory typeFactory,
         SqlOperator sqlOperator, List<? extends RexNode> operands,
         RelDataType type,

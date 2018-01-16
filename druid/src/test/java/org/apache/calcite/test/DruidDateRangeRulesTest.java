@@ -17,7 +17,6 @@
 package org.apache.calcite.test;
 
 import org.apache.calcite.adapter.druid.DruidDateTimeUtils;
-import org.apache.calcite.adapter.druid.LocalInterval;
 import org.apache.calcite.avatica.util.TimeUnitRange;
 import org.apache.calcite.rel.rules.DateRangeRules;
 import org.apache.calcite.rex.RexNode;
@@ -27,16 +26,13 @@ import org.apache.calcite.util.TimestampString;
 import org.apache.calcite.util.Util;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Ordering;
-import com.google.common.collect.RangeSet;
 
 import org.hamcrest.Matcher;
+import org.joda.time.Interval;
 import org.junit.Test;
 
 import java.util.Calendar;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsNull.notNullValue;
@@ -50,7 +46,7 @@ public class DruidDateRangeRulesTest {
     // AND(>=($8, 2014-01-01), <($8, 2015-01-01), >=($8, 2014-06-01), <($8, 2014-07-01))
     checkDateRange(f,
         f.and(f.eq(f.exYear, f.literal(2014)), f.eq(f.exMonth, f.literal(6))),
-        is("[2014-06-01T00:00:00.000/2014-07-01T00:00:00.000]"));
+        is("[2014-06-01T00:00:00.000Z/2014-07-01T00:00:00.000Z]"));
   }
 
   @Test public void testExtractYearAndDayFromDateColumn() {
@@ -65,13 +61,13 @@ public class DruidDateRangeRulesTest {
     //        AND(>=($8, 2010-12-31), <($8, 2011-01-01))))
     checkDateRange(f,
         f.and(f.eq(f.exYear, f.literal(2010)), f.eq(f.exDay, f.literal(31))),
-        is("[2010-01-31T00:00:00.000/2010-02-01T00:00:00.000, "
-            + "2010-03-31T00:00:00.000/2010-04-01T00:00:00.000, "
-            + "2010-05-31T00:00:00.000/2010-06-01T00:00:00.000, "
-            + "2010-07-31T00:00:00.000/2010-08-01T00:00:00.000, "
-            + "2010-08-31T00:00:00.000/2010-09-01T00:00:00.000, "
-            + "2010-10-31T00:00:00.000/2010-11-01T00:00:00.000, "
-            + "2010-12-31T00:00:00.000/2011-01-01T00:00:00.000]"));
+        is("[2010-01-31T00:00:00.000Z/2010-02-01T00:00:00.000Z, "
+            + "2010-03-31T00:00:00.000Z/2010-04-01T00:00:00.000Z, "
+            + "2010-05-31T00:00:00.000Z/2010-06-01T00:00:00.000Z, "
+            + "2010-07-31T00:00:00.000Z/2010-08-01T00:00:00.000Z, "
+            + "2010-08-31T00:00:00.000Z/2010-09-01T00:00:00.000Z, "
+            + "2010-10-31T00:00:00.000Z/2010-11-01T00:00:00.000Z, "
+            + "2010-12-31T00:00:00.000Z/2011-01-01T00:00:00.000Z]"));
   }
 
   @Test public void testExtractYearMonthDayFromDateColumn() {
@@ -92,8 +88,8 @@ public class DruidDateRangeRulesTest {
     checkDateRange(f,
         f.and(f.gt(f.exYear, f.literal(2010)), f.lt(f.exYear, f.literal(2020)),
             f.eq(f.exMonth, f.literal(2)), f.eq(f.exDay, f.literal(29))),
-        is("[2012-02-29T00:00:00.000/2012-03-01T00:00:00.000, "
-            + "2016-02-29T00:00:00.000/2016-03-01T00:00:00.000]"));
+        is("[2012-02-29T00:00:00.000Z/2012-03-01T00:00:00.000Z, "
+            + "2016-02-29T00:00:00.000Z/2016-03-01T00:00:00.000Z]"));
   }
 
   @Test public void testExtractYearMonthDayFromTimestampColumn() {
@@ -112,11 +108,11 @@ public class DruidDateRangeRulesTest {
     //     OR(AND(>=($9, 2012-02-29), <($9, 2012-03-01)),"
     //        AND(>=($9, 2016-02-29), <($9, 2016-03-01))))
     checkDateRange(f,
-        f.and(f.gt(f.exYearTs, f.literal(2010)),
-            f.lt(f.exYearTs, f.literal(2020)),
-            f.eq(f.exMonthTs, f.literal(2)), f.eq(f.exDayTs, f.literal(29))),
-        is("[2012-02-29T00:00:00.000/2012-03-01T00:00:00.000, "
-            + "2016-02-29T00:00:00.000/2016-03-01T00:00:00.000]"));
+        f.and(f.gt(f.exYear, f.literal(2010)),
+            f.lt(f.exYear, f.literal(2020)),
+            f.eq(f.exMonth, f.literal(2)), f.eq(f.exDay, f.literal(29))),
+        is("[2012-02-29T00:00:00.000Z/2012-03-01T00:00:00.000Z, "
+            + "2016-02-29T00:00:00.000Z/2016-03-01T00:00:00.000Z]"));
   }
 
   /** Test case for
@@ -132,12 +128,12 @@ public class DruidDateRangeRulesTest {
     c.set(2011, Calendar.JANUARY, 1);
     final TimestampString to = TimestampString.fromCalendarFields(c);
 
-    // dt >= 2010-01-01 AND dt < 2011-01-01
+    // d >= 2010-01-01 AND d < 2011-01-01
     checkDateRangeNoSimplify(f,
         f.and(
-            f.ge(f.dt, f.cast(f.timeStampDataType, f.timestampLiteral(from))),
-            f.lt(f.dt, f.cast(f.timeStampDataType, f.timestampLiteral(to)))),
-        is("[2010-01-01T00:00:00.000/2011-01-01T00:00:00.000]"));
+            f.ge(f.d, f.cast(f.timestampDataType, f.timestampLiteral(from))),
+            f.lt(f.d, f.cast(f.timestampDataType, f.timestampLiteral(to)))),
+        is("[2010-01-01T00:00:00.000Z/2011-01-01T00:00:00.000Z]"));
   }
 
   // For testFilterWithCast we need to no simplify the expression, which would
@@ -145,40 +141,18 @@ public class DruidDateRangeRulesTest {
   // HiveRexExecutorImpl is used in Hive
   private void checkDateRangeNoSimplify(Fixture f, RexNode e,
       Matcher<String> intervalMatcher) {
-    final Map<String, RangeSet<Calendar>> operandRanges = new HashMap<>();
-    // We rely on the collection being sorted (so YEAR comes before MONTH
-    // before HOUR) and unique. A predicate on MONTH is not useful if there is
-    // no predicate on YEAR. Then when we apply the predicate on DAY it doesn't
-    // generate hundreds of ranges we'll later throw away.
-    final List<TimeUnitRange> timeUnits =
-        Ordering.natural().sortedCopy(DateRangeRules.extractTimeUnits(e));
-    for (TimeUnitRange timeUnit : timeUnits) {
-      e = e.accept(
-          new DateRangeRules.ExtractShuttle(f.rexBuilder, timeUnit,
-              operandRanges));
-    }
-    final List<LocalInterval> intervals =
-        DruidDateTimeUtils.createInterval(f.timeStampDataType, e);
+    e = DateRangeRules.replaceTimeUnits(f.rexBuilder, e);
+    final List<Interval> intervals =
+        DruidDateTimeUtils.createInterval(e, "UTC");
     assertThat(intervals, notNullValue());
     assertThat(intervals.toString(), intervalMatcher);
   }
 
   private void checkDateRange(Fixture f, RexNode e, Matcher<String> intervalMatcher) {
-    final Map<String, RangeSet<Calendar>> operandRanges = new HashMap<>();
-    // We rely on the collection being sorted (so YEAR comes before MONTH
-    // before HOUR) and unique. A predicate on MONTH is not useful if there is
-    // no predicate on YEAR. Then when we apply the predicate on DAY it doesn't
-    // generate hundreds of ranges we'll later throw away.
-    final List<TimeUnitRange> timeUnits =
-        Ordering.natural().sortedCopy(DateRangeRules.extractTimeUnits(e));
-    for (TimeUnitRange timeUnit : timeUnits) {
-      e = e.accept(
-          new DateRangeRules.ExtractShuttle(f.rexBuilder, timeUnit,
-              operandRanges));
-    }
+    e = DateRangeRules.replaceTimeUnits(f.rexBuilder, e);
     final RexNode e2 = f.simplify.simplify(e);
-    List<LocalInterval> intervals =
-        DruidDateTimeUtils.createInterval(f.timeStampDataType, e2);
+    List<Interval> intervals =
+        DruidDateTimeUtils.createInterval(e2, "UTC");
     if (intervals == null) {
       throw new AssertionError("null interval");
     }
@@ -190,26 +164,14 @@ public class DruidDateRangeRulesTest {
     private final RexNode exYear;
     private final RexNode exMonth;
     private final RexNode exDay;
-    private final RexNode exYearTs;
-    private final RexNode exMonthTs;
-    private final RexNode exDayTs;
 
     Fixture2() {
-      exYear = rexBuilder.makeCall(intRelDataType,
-          SqlStdOperatorTable.EXTRACT_DATE,
-          ImmutableList.of(rexBuilder.makeFlag(TimeUnitRange.YEAR), dt));
-      exMonth = rexBuilder.makeCall(intRelDataType,
-          SqlStdOperatorTable.EXTRACT_DATE,
-          ImmutableList.of(rexBuilder.makeFlag(TimeUnitRange.MONTH), dt));
-      exDay = rexBuilder.makeCall(intRelDataType,
-          SqlStdOperatorTable.EXTRACT_DATE,
-          ImmutableList.of(rexBuilder.makeFlag(TimeUnitRange.DAY), dt));
-      exYearTs = rexBuilder.makeCall(SqlStdOperatorTable.EXTRACT,
+      exYear = rexBuilder.makeCall(SqlStdOperatorTable.EXTRACT,
           ImmutableList.of(rexBuilder.makeFlag(TimeUnitRange.YEAR), ts));
-      exMonthTs = rexBuilder.makeCall(intRelDataType,
+      exMonth = rexBuilder.makeCall(intRelDataType,
           SqlStdOperatorTable.EXTRACT,
           ImmutableList.of(rexBuilder.makeFlag(TimeUnitRange.MONTH), ts));
-      exDayTs = rexBuilder.makeCall(intRelDataType,
+      exDay = rexBuilder.makeCall(intRelDataType,
           SqlStdOperatorTable.EXTRACT,
           ImmutableList.of(rexBuilder.makeFlag(TimeUnitRange.DAY), ts));
     }

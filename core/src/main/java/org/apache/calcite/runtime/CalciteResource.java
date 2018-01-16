@@ -55,6 +55,9 @@ public interface CalciteResource {
   @BaseMessage("BETWEEN operator has no terminating AND")
   ExInst<SqlValidatorException> betweenWithoutAnd();
 
+  @BaseMessage("Geo-spatial extensions and the GEOMETRY data type are not enabled")
+  ExInst<SqlValidatorException> geometryDisabled();
+
   @BaseMessage("Illegal INTERVAL literal {0}; at {1}")
   @Property(name = "SQLSTATE", value = "42000")
   ExInst<CalciteException> illegalIntervalLiteral(String a0, String a1);
@@ -317,9 +320,6 @@ public interface CalciteResource {
   @BaseMessage("Windowed aggregate expression is illegal in {0} clause")
   ExInst<SqlValidatorException> windowedAggregateIllegalInClause(String a0);
 
-  @BaseMessage("Aggregate expression is illegal in GROUP BY clause")
-  ExInst<SqlValidatorException> aggregateIllegalInGroupBy();
-
   @BaseMessage("Aggregate expressions cannot be nested")
   ExInst<SqlValidatorException> nestedAggIllegal();
 
@@ -445,6 +445,9 @@ public interface CalciteResource {
   @BaseMessage("DEFAULT is only allowed for optional parameters")
   ExInst<SqlValidatorException> defaultForOptionalParameter();
 
+  @BaseMessage("DEFAULT not allowed here")
+  ExInst<SqlValidatorException> defaultNotAllowed();
+
   @BaseMessage("Not allowed to perform {0} on {1}")
   ExInst<SqlValidatorException> accessNotAllowed(String a0, String a1);
 
@@ -521,8 +524,8 @@ public interface CalciteResource {
   @BaseMessage("''{0}'' is not a valid datetime format")
   ExInst<CalciteException> invalidDatetimeFormat(String a0);
 
-  @BaseMessage("Cannot explicitly insert value into IDENTITY column ''{0}'' which is ALWAYS GENERATED")
-  ExInst<CalciteException> insertIntoAlwaysGenerated(String a0);
+  @BaseMessage("Cannot INSERT into generated column ''{0}''")
+  ExInst<SqlValidatorException> insertIntoAlwaysGenerated(String a0);
 
   @BaseMessage("Argument to function ''{0}'' must have a scale of 0")
   ExInst<CalciteException> argumentMustHaveScaleZero(String a0);
@@ -564,8 +567,7 @@ public interface CalciteResource {
 
   @BaseMessage("Execution of a new autocommit statement while a cursor is still open on same connection is not supported")
   @Property(name = "FeatureDefinition", value = "Eigenbase-defined")
-  ExInst<CalciteException>
-  sQLConformance_MultipleActiveAutocommitStatements();
+  ExInst<CalciteException> sQLConformance_MultipleActiveAutocommitStatements();
 
   @BaseMessage("Descending sort (ORDER BY DESC) not supported")
   @Property(name = "FeatureDefinition", value = "Eigenbase-defined")
@@ -708,11 +710,47 @@ public interface CalciteResource {
   @BaseMessage("Unknown pattern ''{0}''")
   ExInst<SqlValidatorException> unknownPattern(String call);
 
+  @BaseMessage("Interval must be non-negative ''{0}''")
+  ExInst<SqlValidatorException> intervalMustBeNonNegative(String call);
+
+  @BaseMessage("Must contain an ORDER BY clause when WITHIN is used")
+  ExInst<SqlValidatorException> cannotUseWithinWithoutOrderBy();
+
+  @BaseMessage("First column of ORDER BY must be of type TIMESTAMP")
+  ExInst<SqlValidatorException> firstColumnOfOrderByMustBeTimestamp();
+
   @BaseMessage("Extended columns not allowed under the current SQL conformance level")
   ExInst<SqlValidatorException> extendNotAllowed();
 
   @BaseMessage("Rolled up column ''{0}'' is not allowed in {1}")
   ExInst<SqlValidatorException> rolledUpNotAllowed(String column, String context);
+
+  @BaseMessage("Schema ''{0}'' already exists")
+  ExInst<SqlValidatorException> schemaExists(String name);
+
+  @BaseMessage("Invalid schema type ''{0}''; valid values: {1}")
+  ExInst<SqlValidatorException> schemaInvalidType(String type, String values);
+
+  @BaseMessage("Table ''{0}'' already exists")
+  ExInst<SqlValidatorException> tableExists(String name);
+
+  // If CREATE TABLE does not have "AS query", there must be a column list
+  @BaseMessage("Missing column list")
+  ExInst<SqlValidatorException> createTableRequiresColumnList();
+
+  // If CREATE TABLE does not have "AS query", a type must be specified for each
+  // column
+  @BaseMessage("Type required for column ''{0}'' in CREATE TABLE without AS")
+  ExInst<SqlValidatorException> createTableRequiresColumnTypes(String columnName);
+
+  @BaseMessage("View ''{0}'' already exists and REPLACE not specified")
+  ExInst<SqlValidatorException> viewExists(String name);
+
+  @BaseMessage("Schema ''{0}'' not found")
+  ExInst<SqlValidatorException> schemaNotFound(String name);
+
+  @BaseMessage("View ''{0}'' not found")
+  ExInst<SqlValidatorException> viewNotFound(String name);
 }
 
 // End CalciteResource.java

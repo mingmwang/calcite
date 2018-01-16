@@ -19,11 +19,13 @@ package org.apache.calcite.prepare;
 import org.apache.calcite.config.CalciteConnectionConfig;
 import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
+import org.apache.calcite.model.ModelHandler;
 import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeFactoryImpl;
 import org.apache.calcite.rel.type.RelDataTypeField;
+import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.runtime.PredicateImpl;
 import org.apache.calcite.schema.AggregateFunction;
 import org.apache.calcite.schema.Function;
@@ -33,18 +35,23 @@ import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.TableFunction;
 import org.apache.calcite.schema.TableMacro;
 import org.apache.calcite.schema.Wrapper;
+import org.apache.calcite.schema.impl.ScalarFunctionImpl;
 import org.apache.calcite.sql.SqlFunctionCategory;
 import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.SqlOperatorBinding;
+import org.apache.calcite.sql.SqlOperatorTable;
 import org.apache.calcite.sql.SqlSyntax;
+import org.apache.calcite.sql.parser.SqlParserPos;
 import org.apache.calcite.sql.type.FamilyOperandTypeChecker;
 import org.apache.calcite.sql.type.InferTypes;
 import org.apache.calcite.sql.type.OperandTypes;
 import org.apache.calcite.sql.type.ReturnTypes;
 import org.apache.calcite.sql.type.SqlReturnTypeInference;
+import org.apache.calcite.sql.type.SqlTypeFactoryImpl;
 import org.apache.calcite.sql.type.SqlTypeFamily;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.calcite.sql.util.ListSqlOperatorTable;
 import org.apache.calcite.sql.validate.SqlMoniker;
 import org.apache.calcite.sql.validate.SqlMonikerImpl;
 import org.apache.calcite.sql.validate.SqlMonikerType;
@@ -113,36 +120,7 @@ public class CalciteCatalogReader implements Prepare.CatalogReader {
   public Prepare.PreparingTable getTable(final List<String> names) {
     // First look in the default schema, if any.
     // If not found, look in the root schema.
-    for (List<String> schemaPath : schemaPaths) {
-      Prepare.PreparingTable table =
-          getTableFrom(names, schemaPath, nameMatcher);
-      if (table != null) {
-        return table;
-      }
-    }
-    return null;
-  }
-
-  @Override public CalciteConnectionConfig getConfig() {
-    return config;
-  }
-
-  private Prepare.PreparingTable getTableFrom(List<String> names,
-                                              List<String> schemaNames,
-                                              SqlNameMatcher nameMatcher) {
-    CalciteSchema schema =
-        getSchema(Iterables.concat(schemaNames, Util.skipLast(names)),
-            nameMatcher);
-    if (schema == null) {
-      return null;
-    }
-    final String name = Util.last(names);
-    CalciteSchema.TableEntry entry =
-        schema.getTable(name, nameMatcher.isCaseSensitive());
-    if (entry == null) {
-      entry = schema.getTableBasedOnNullaryFunction(name,
-          nameMatcher.isCaseSensitive());
-    }
+    CalciteSchema.TableEntry entry = SqlValidatorUtil.getTableEntry(this, names);
     if (entry != null) {
       final Table table = entry.getTable();
       if (table instanceof Wrapper) {
@@ -152,10 +130,14 @@ public class CalciteCatalogReader implements Prepare.CatalogReader {
           return relOptTable;
         }
       }
-      return RelOptTableImpl.create(this, table.getRowType(typeFactory), entry,
-          null);
+      return RelOptTableImpl.create(this,
+          table.getRowType(typeFactory), entry, null);
     }
     return null;
+  }
+
+  @Override public CalciteConnectionConfig getConfig() {
+    return config;
   }
 
   private Collection<Function> getFunctionsFrom(List<String> names) {
@@ -171,7 +153,8 @@ public class CalciteCatalogReader implements Prepare.CatalogReader {
       }
     } else {
       for (List<String> schemaPath : schemaPaths) {
-        CalciteSchema schema = getSchema(schemaPath, nameMatcher);
+        CalciteSchema schema =
+            SqlValidatorUtil.getSchema(rootSchema, schemaPath, nameMatcher);
         if (schema != null) {
           schemaNameList.addAll(schema.getPath());
         }
@@ -179,8 +162,8 @@ public class CalciteCatalogReader implements Prepare.CatalogReader {
     }
     for (List<String> schemaNames : schemaNameList) {
       CalciteSchema schema =
-          getSchema(Iterables.concat(schemaNames, Util.skipLast(names)),
-              nameMatcher);
+          SqlValidatorUtil.getSchema(rootSchema,
+              Iterables.concat(schemaNames, Util.skipLast(names)), nameMatcher);
       if (schema != null) {
         final String name = Util.last(names);
         functions2.addAll(schema.getFunctions(name, true));
@@ -189,28 +172,13 @@ public class CalciteCatalogReader implements Prepare.CatalogReader {
     return functions2;
   }
 
-  private CalciteSchema getSchema(Iterable<String> schemaNames,
-      SqlNameMatcher nameMatcher) {
-    CalciteSchema schema = rootSchema;
-    for (String schemaName : schemaNames) {
-      if (schema == rootSchema
-          && nameMatcher.matches(schemaName, schema.getName())) {
-        continue;
-      }
-      schema = schema.getSubSchema(schemaName, nameMatcher.isCaseSensitive());
-      if (schema == null) {
-        return null;
-      }
-    }
-    return schema;
-  }
-
   public RelDataType getNamedType(SqlIdentifier typeName) {
     return null;
   }
 
   public List<SqlMoniker> getAllSchemaObjectNames(List<String> names) {
-    final CalciteSchema schema = getSchema(names, nameMatcher);
+    final CalciteSchema schema =
+        SqlValidatorUtil.getSchema(rootSchema, names, nameMatcher);
     if (schema == null) {
       return ImmutableList.of();
     }
@@ -313,7 +281,43 @@ public class CalciteCatalogReader implements Prepare.CatalogReader {
             }));
   }
 
+  /** Creates an operator table that contains functions in the given class.
+   *
+   * @see ModelHandler#addFunctions */
+  public static SqlOperatorTable operatorTable(String className) {
+    // Dummy schema to collect the functions
+    final CalciteSchema schema =
+        CalciteSchema.createRootSchema(false, false);
+    ModelHandler.addFunctions(schema.plus(), null, ImmutableList.<String>of(),
+        className, "*", true);
+
+    // The following is technical debt; see [CALCITE-2082] Remove
+    // RelDataTypeFactory argument from SqlUserDefinedAggFunction constructor
+    final SqlTypeFactoryImpl typeFactory =
+        new SqlTypeFactoryImpl(RelDataTypeSystem.DEFAULT);
+
+    final ListSqlOperatorTable table = new ListSqlOperatorTable();
+    for (String name : schema.getFunctionNames()) {
+      for (Function function : schema.getFunctions(name, true)) {
+        final SqlIdentifier id = new SqlIdentifier(name, SqlParserPos.ZERO);
+        table.add(
+            toOp(typeFactory, id, function));
+      }
+    }
+    return table;
+  }
+
   private SqlOperator toOp(SqlIdentifier name, final Function function) {
+    return toOp(typeFactory, name, function);
+  }
+
+  /** Converts a function to a {@link org.apache.calcite.sql.SqlOperator}.
+   *
+   * <p>The {@code typeFactory} argument is technical debt; see [CALCITE-2082]
+   * Remove RelDataTypeFactory argument from SqlUserDefinedAggFunction
+   * constructor. */
+  private static SqlOperator toOp(RelDataTypeFactory typeFactory,
+      SqlIdentifier name, final Function function) {
     List<RelDataType> argTypes = new ArrayList<>();
     List<SqlTypeFamily> typeFamilies = new ArrayList<>();
     for (FunctionParameter o : function.getParameters()) {
@@ -330,7 +334,7 @@ public class CalciteCatalogReader implements Prepare.CatalogReader {
         };
     final FamilyOperandTypeChecker typeChecker =
         OperandTypes.family(typeFamilies, optional);
-    final List<RelDataType> paramTypes = toSql(argTypes);
+    final List<RelDataType> paramTypes = toSql(typeFactory, argTypes);
     if (function instanceof ScalarFunction) {
       return new SqlUserDefinedFunction(name, infer((ScalarFunction) function),
           InferTypes.explicit(argTypes), typeChecker, paramTypes, function);
@@ -351,34 +355,45 @@ public class CalciteCatalogReader implements Prepare.CatalogReader {
     }
   }
 
-  private SqlReturnTypeInference infer(final ScalarFunction function) {
+  private static SqlReturnTypeInference infer(final ScalarFunction function) {
     return new SqlReturnTypeInference() {
       public RelDataType inferReturnType(SqlOperatorBinding opBinding) {
-        final RelDataType type = function.getReturnType(typeFactory);
-        return toSql(type);
+        final RelDataTypeFactory typeFactory = opBinding.getTypeFactory();
+        final RelDataType type;
+        if (function instanceof ScalarFunctionImpl) {
+          type = ((ScalarFunctionImpl) function).getReturnType(typeFactory,
+              opBinding);
+        } else {
+          type = function.getReturnType(typeFactory);
+        }
+        return toSql(typeFactory, type);
       }
     };
   }
 
-  private SqlReturnTypeInference infer(final AggregateFunction function) {
+  private static SqlReturnTypeInference infer(
+      final AggregateFunction function) {
     return new SqlReturnTypeInference() {
       public RelDataType inferReturnType(SqlOperatorBinding opBinding) {
+        final RelDataTypeFactory typeFactory = opBinding.getTypeFactory();
         final RelDataType type = function.getReturnType(typeFactory);
-        return toSql(type);
+        return toSql(typeFactory, type);
       }
     };
   }
 
-  private List<RelDataType> toSql(List<RelDataType> types) {
+  private static List<RelDataType> toSql(
+      final RelDataTypeFactory typeFactory, List<RelDataType> types) {
     return Lists.transform(types,
         new com.google.common.base.Function<RelDataType, RelDataType>() {
           public RelDataType apply(RelDataType type) {
-            return toSql(type);
+            return toSql(typeFactory, type);
           }
         });
   }
 
-  private RelDataType toSql(RelDataType type) {
+  private static RelDataType toSql(RelDataTypeFactory typeFactory,
+      RelDataType type) {
     if (type instanceof RelDataTypeFactoryImpl.JavaType
         && ((RelDataTypeFactoryImpl.JavaType) type).getJavaClass()
         == Object.class) {

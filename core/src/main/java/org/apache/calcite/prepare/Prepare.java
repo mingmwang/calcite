@@ -43,6 +43,7 @@ import org.apache.calcite.rex.RexExecutorImpl;
 import org.apache.calcite.runtime.Bindable;
 import org.apache.calcite.runtime.Hook;
 import org.apache.calcite.runtime.Typed;
+import org.apache.calcite.schema.ColumnStrategy;
 import org.apache.calcite.schema.ExtensibleTable;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.Wrapper;
@@ -87,7 +88,6 @@ public abstract class Prepare {
 
   protected final CalcitePrepare.Context context;
   protected final CatalogReader catalogReader;
-  protected String queryString = null;
   /**
    * Convention via which results should be returned by execution.
    */
@@ -143,10 +143,12 @@ public abstract class Prepare {
 
     final List<RelOptMaterialization> materializationList = new ArrayList<>();
     for (Materialization materialization : materializations) {
+      List<String> qualifiedTableName = materialization.materializedTable.path();
       materializationList.add(
           new RelOptMaterialization(materialization.tableRel,
               materialization.queryRel,
-              materialization.starRelOptTable));
+              materialization.starRelOptTable,
+              qualifiedTableName));
     }
 
     final List<RelOptLattice> latticeList = new ArrayList<>();
@@ -239,8 +241,6 @@ public abstract class Prepare {
       Class runtimeContextClass,
       SqlValidator validator,
       boolean needsValidation) {
-    queryString = sqlQuery.toString();
-
     init(runtimeContextClass);
 
     final SqlToRelConverter.ConfigBuilder builder =
@@ -430,8 +430,10 @@ public abstract class Prepare {
    * for {@link #columnHasDefaultValue}. */
   public abstract static class AbstractPreparingTable
       implements PreparingTable {
+    @SuppressWarnings("deprecation")
     public boolean columnHasDefaultValue(RelDataType rowType, int ordinal,
         InitializerContext initializerContext) {
+      // This method is no longer used
       final Table table = this.unwrap(Table.class);
       if (table != null && table instanceof Wrapper) {
         final InitializerExpressionFactory initializerExpressionFactory =
@@ -477,6 +479,10 @@ public abstract class Prepare {
     /** Implementation-specific code to instantiate a new {@link RelOptTable}
      * based on a {@link Table} that has been extended. */
     protected abstract RelOptTable extend(Table extendedTable);
+
+    public List<ColumnStrategy> getColumnStrategies() {
+      return RelOptTableImpl.columnStrategies(AbstractPreparingTable.this);
+    }
   }
 
   /**

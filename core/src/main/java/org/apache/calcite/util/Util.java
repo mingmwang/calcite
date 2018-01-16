@@ -38,6 +38,7 @@ import com.google.common.cache.LoadingCache;
 import com.google.common.collect.Collections2;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Sets;
 
 import org.slf4j.Logger;
 
@@ -84,6 +85,7 @@ import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -225,8 +227,10 @@ public class Util {
    * you are not interested in, but you don't want the compiler to warn that
    * you are not using it.
    */
-  public static boolean discard(boolean b) {
-    return b;
+  public static void discard(boolean b) {
+    if (false) {
+      discard(b);
+    }
   }
 
   /**
@@ -2001,6 +2005,38 @@ public class Util {
     return -1;
   }
 
+  /** Converts a list into a list with unique elements.
+   *
+   * <p>The order is preserved; the second and subsequent occurrences are
+   * removed.
+   *
+   * <p>If the list is already unique it is returned unchanged. */
+  public static <E> List<E> distinctList(List<E> list) {
+    if (isDistinct(list)) {
+      return list;
+    }
+    return ImmutableList.copyOf(new LinkedHashSet<>(list));
+  }
+
+  /** Converts an iterable into a list with unique elements.
+   *
+   * <p>The order is preserved; the second and subsequent occurrences are
+   * removed.
+   *
+   * <p>If {@code iterable} is a unique list it is returned unchanged. */
+  public static <E> List<E> distinctList(Iterable<E> keys) {
+    if (keys instanceof Set) {
+      return ImmutableList.copyOf(keys);
+    }
+    if (keys instanceof List) {
+      @SuppressWarnings("unchecked") final List<E> list = (List) keys;
+      if (isDistinct(list)) {
+        return list;
+      }
+    }
+    return ImmutableList.copyOf(Sets.newLinkedHashSet(keys));
+  }
+
   /** Returns whether two collections have any elements in common. */
   public static <E> boolean intersects(Collection<E> c0, Collection<E> c1) {
     for (E e : c1) {
@@ -2240,8 +2276,8 @@ public class Util {
 
   /** Returns a copy of a list of lists, making the component lists immutable if
    * they are not already. */
-  public static <E> List<List<E>>
-  immutableCopy(Iterable<? extends Iterable<E>> lists) {
+  public static <E> List<List<E>> immutableCopy(
+      Iterable<? extends Iterable<E>> lists) {
     int n = 0;
     for (Iterable<E> list : lists) {
       if (!(list instanceof ImmutableList)) {

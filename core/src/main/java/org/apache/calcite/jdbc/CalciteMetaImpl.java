@@ -596,13 +596,25 @@ public class CalciteMetaImpl extends MetaImpl {
       synchronized (callback.getMonitor()) {
         callback.clear();
         final CalciteConnectionImpl calciteConnection = getConnection();
-        CalciteServerStatement statement =
+        final CalciteServerStatement statement =
             calciteConnection.server.getStatement(h);
         final Context context = statement.createPrepareContext();
         final CalcitePrepare.Query<Object> query = toQuery(context, sql);
         signature = calciteConnection.parseQuery(query, context, maxRowCount);
         statement.setSignature(signature);
-        callback.assign(signature, null, -1);
+        final int updateCount;
+        switch (signature.statementType) {
+        case CREATE:
+        case DROP:
+        case ALTER:
+        case OTHER_DDL:
+          updateCount = 0; // DDL produces no result set
+          break;
+        default:
+          updateCount = -1; // SELECT and DML produces result set
+          break;
+        }
+        callback.assign(signature, null, updateCount);
       }
       callback.execute();
       final MetaResultSet metaResultSet =
@@ -774,10 +786,10 @@ public class CalciteMetaImpl extends MetaImpl {
   private static class CalciteMetaTable extends MetaTable {
     private final Table calciteTable;
 
-    public CalciteMetaTable(Table calciteTable, String tableCat,
+    CalciteMetaTable(Table calciteTable, String tableCat,
         String tableSchem, String tableName) {
       super(tableCat, tableSchem, tableName,
-          calciteTable.getJdbcTableType().name());
+          calciteTable.getJdbcTableType().jdbcName);
       this.calciteTable = Preconditions.checkNotNull(calciteTable);
     }
   }
@@ -786,16 +798,18 @@ public class CalciteMetaImpl extends MetaImpl {
   private static class CalciteMetaSchema extends MetaSchema {
     private final CalciteSchema calciteSchema;
 
-    public CalciteMetaSchema(CalciteSchema calciteSchema,
+    CalciteMetaSchema(CalciteSchema calciteSchema,
         String tableCatalog, String tableSchem) {
       super(tableCatalog, tableSchem);
       this.calciteSchema = calciteSchema;
     }
   }
 
-  /** Table whose contents are metadata. */
+  /** Table whose contents are metadata.
+   *
+   * @param <E> element type */
   abstract static class MetadataTable<E> extends AbstractQueryableTable {
-    public MetadataTable(Class<E> clazz) {
+    MetadataTable(Class<E> clazz) {
       super(clazz);
     }
 
@@ -828,7 +842,9 @@ public class CalciteMetaImpl extends MetaImpl {
   }
 
   /** Iterator that returns at most {@code limit} rows from an underlying
-   * {@link Iterator}. */
+   * {@link Iterator}.
+   *
+   * @param <E> element type */
   private static class LimitIterator<E> implements Iterator<E> {
     private final Iterator<E> iterator;
     private final long limit;

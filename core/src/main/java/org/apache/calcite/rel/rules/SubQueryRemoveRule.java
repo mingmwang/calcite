@@ -110,7 +110,9 @@ public abstract class SubQueryRemoveRule extends RelOptRule {
             final RelOptUtil.Logic logic =
                 LogicVisitor.find(RelOptUtil.Logic.TRUE, ImmutableList.of(c),
                     e);
-            final RexNode target = apply(e, filter.getVariablesSet(), logic,
+            final Set<CorrelationId>  variablesSet =
+                RelOptUtil.getVariablesUsed(e.rel);
+            final RexNode target = apply(e, variablesSet, logic,
                 builder, 1, builder.peek().getRowType().getFieldCount());
             final RexShuttle shuttle = new ReplaceSubQueryShuttle(e, target);
             c = c.accept(shuttle);
@@ -146,7 +148,14 @@ public abstract class SubQueryRemoveRule extends RelOptRule {
         }
       };
 
-  private SubQueryRemoveRule(RelOptRuleOperand operand,
+  /**
+   * Creates a SubQueryRemoveRule.
+   *
+   * @param operand     root operand, must not be null
+   * @param description Description, or null to guess description
+   * @param relBuilderFactory Builder for relational expressions
+   */
+  public SubQueryRemoveRule(RelOptRuleOperand operand,
       RelBuilderFactory relBuilderFactory,
       String description) {
     super(operand, relBuilderFactory, description);
@@ -163,8 +172,8 @@ public abstract class SubQueryRemoveRule extends RelOptRule {
           ImmutableBitSet.of());
       if (unique == null || !unique) {
         builder.aggregate(builder.groupKey(),
-            builder.aggregateCall(SqlStdOperatorTable.SINGLE_VALUE, false, null,
-                null, builder.field(0)));
+            builder.aggregateCall(SqlStdOperatorTable.SINGLE_VALUE, false,
+                false, null, null, builder.field(0)));
       }
       builder.join(JoinRelType.LEFT, builder.literal(true), variablesSet);
       return field(builder, inputCount, offset);
@@ -290,8 +299,8 @@ public abstract class SubQueryRemoveRule extends RelOptRule {
         }
         builder.aggregate(builder.groupKey(),
             builder.count(false, "c"),
-            builder.aggregateCall(SqlStdOperatorTable.COUNT, false, null, "ck",
-                builder.fields()));
+            builder.aggregateCall(SqlStdOperatorTable.COUNT, false, false, null,
+                "ck", builder.fields()));
         builder.as("ct");
         if (!variablesSet.isEmpty()) {
           builder.join(JoinRelType.LEFT, builder.literal(true), variablesSet);
@@ -402,7 +411,7 @@ public abstract class SubQueryRemoveRule extends RelOptRule {
     private final RexSubQuery subQuery;
     private final RexNode replacement;
 
-    public ReplaceSubQueryShuttle(RexSubQuery subQuery, RexNode replacement) {
+    ReplaceSubQueryShuttle(RexSubQuery subQuery, RexNode replacement) {
       this.subQuery = subQuery;
       this.replacement = replacement;
     }

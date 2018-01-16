@@ -698,7 +698,7 @@ public class ImmutableBitSet
   /** Returns a bit set with all the bits in this set that are not in
    * another.
    *
-   *  @see BitSet#andNot(java.util.BitSet) */
+   * @see BitSet#andNot(java.util.BitSet) */
   public ImmutableBitSet except(ImmutableBitSet that) {
     final Builder builder = rebuild();
     builder.removeAll(that);
@@ -706,9 +706,9 @@ public class ImmutableBitSet
   }
 
   /** Returns a bit set with all the bits set in both this set and in
-   *  another.
+   * another.
    *
-   *  @see BitSet#and */
+   * @see BitSet#and */
   public ImmutableBitSet intersect(ImmutableBitSet that) {
     final Builder builder = rebuild();
     builder.intersect(that);
@@ -843,6 +843,15 @@ public class ImmutableBitSet
     return union(ImmutableBitSet.of(i));
   }
 
+  /** Returns a bit set the same as this but with a given bit set (if b is
+   * true) or unset (if b is false). */
+  public ImmutableBitSet set(int i, boolean b) {
+    if (get(i) == b) {
+      return this;
+    }
+    return b ? set(i) : clear(i);
+  }
+
   /** Returns a bit set the same as this but with a given bit set if condition
    * is true. */
   public ImmutableBitSet setIf(int bit, boolean condition) {
@@ -914,7 +923,7 @@ public class ImmutableBitSet
     private final SortedMap<Integer, ImmutableBitSet> closure =
         Maps.newTreeMap();
 
-    public Closure(SortedMap<Integer, ImmutableBitSet> equivalence) {
+    Closure(SortedMap<Integer, ImmutableBitSet> equivalence) {
       this.equivalence = equivalence;
       final ImmutableIntList keys =
           ImmutableIntList.copyOf(equivalence.keySet());

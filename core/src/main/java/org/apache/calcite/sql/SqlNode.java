@@ -16,6 +16,7 @@
  */
 package org.apache.calcite.sql;
 
+import org.apache.calcite.sql.dialect.AnsiSqlDialect;
 import org.apache.calcite.sql.parser.SqlParserPos;
 import org.apache.calcite.sql.pretty.SqlPrettyWriter;
 import org.apache.calcite.sql.util.SqlString;
@@ -62,8 +63,18 @@ public abstract class SqlNode implements Cloneable {
 
   //~ Methods ----------------------------------------------------------------
 
+  /** @deprecated Please use {@link #clone(SqlNode)}; this method brings
+   * along too much baggage from early versions of Java */
+  @Deprecated
+  @SuppressWarnings("MethodDoesntCallSuperMethod")
   public Object clone() {
     return clone(getParserPosition());
+  }
+
+  /** Creates a copy of a SqlNode. */
+  public static <E extends SqlNode> E clone(E e) {
+    //noinspection unchecked
+    return (E) e.clone(e.pos);
   }
 
   /**
@@ -104,7 +115,7 @@ public abstract class SqlNode implements Cloneable {
     for (int i = 0; i < clones.length; i++) {
       SqlNode node = clones[i];
       if (node != null) {
-        clones[i] = (SqlNode) node.clone();
+        clones[i] = SqlNode.clone(node);
       }
     }
     return clones;
@@ -132,7 +143,7 @@ public abstract class SqlNode implements Cloneable {
    */
   public SqlString toSqlString(SqlDialect dialect, boolean forceParens) {
     if (dialect == null) {
-      dialect = SqlDialect.DUMMY;
+      dialect = AnsiSqlDialect.DEFAULT;
     }
     SqlPrettyWriter writer = new SqlPrettyWriter(dialect);
     writer.setAlwaysUseParentheses(forceParens);

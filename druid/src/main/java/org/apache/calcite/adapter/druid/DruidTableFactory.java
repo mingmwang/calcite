@@ -25,6 +25,9 @@ import org.apache.calcite.util.Util;
 
 import com.google.common.collect.ImmutableList;
 
+import org.joda.time.Interval;
+import org.joda.time.chrono.ISOChronology;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -59,7 +62,7 @@ public class DruidTableFactory implements TableFactory {
     } else {
       timestampColumnName = DruidTable.DEFAULT_TIMESTAMP_COLUMN;
     }
-    fieldBuilder.put(timestampColumnName, SqlTypeName.TIMESTAMP);
+    fieldBuilder.put(timestampColumnName, SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
     final Object dimensionsRaw = operand.get("dimensions");
     if (dimensionsRaw instanceof List) {
       // noinspection unchecked
@@ -121,9 +124,10 @@ public class DruidTableFactory implements TableFactory {
       }
     }
     final Object interval = operand.get("interval");
-    final List<LocalInterval> intervals;
+    final List<Interval> intervals;
     if (interval instanceof String) {
-      intervals = ImmutableList.of(LocalInterval.create((String) interval));
+      intervals = ImmutableList.of(
+          new Interval((String) interval, ISOChronology.getInstanceUTC()));
     } else {
       intervals = null;
     }

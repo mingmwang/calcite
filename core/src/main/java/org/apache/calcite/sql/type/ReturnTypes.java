@@ -318,6 +318,7 @@ public abstract class ReturnTypes {
               new ExplicitOperatorBinding(
                   opBinding,
                   new AbstractList<RelDataType>() {
+                    // CHECKSTYLE: IGNORE 12
                     public RelDataType get(int index) {
                       RelDataType type =
                           opBinding.getOperandType(index)
@@ -329,7 +330,6 @@ public abstract class ReturnTypes {
                     public int size() {
                       return opBinding.getOperandCount();
                     }
-                    // CHECKSTYLE: IGNORE 1
                   });
           RelDataType biggestElementType =
               LEAST_RESTRICTIVE.inferReturnType(newBinding);
@@ -647,8 +647,7 @@ public abstract class ReturnTypes {
    * {@link org.apache.calcite.sql.type.SqlTypeTransforms#TO_NULLABLE},
    * {@link org.apache.calcite.sql.type.SqlTypeTransforms#TO_VARYING}.
    */
-  public static final SqlReturnTypeInference
-  DYADIC_STRING_SUM_PRECISION_NULLABLE_VARYING =
+  public static final SqlReturnTypeInference DYADIC_STRING_SUM_PRECISION_NULLABLE_VARYING =
       cascade(DYADIC_STRING_SUM_PRECISION, SqlTypeTransforms.TO_NULLABLE,
           SqlTypeTransforms.TO_VARYING);
 
@@ -656,8 +655,7 @@ public abstract class ReturnTypes {
    * Same as {@link #DYADIC_STRING_SUM_PRECISION} and using
    * {@link org.apache.calcite.sql.type.SqlTypeTransforms#TO_NULLABLE}
    */
-  public static final SqlReturnTypeInference
-  DYADIC_STRING_SUM_PRECISION_NULLABLE =
+  public static final SqlReturnTypeInference DYADIC_STRING_SUM_PRECISION_NULLABLE =
       cascade(DYADIC_STRING_SUM_PRECISION, SqlTypeTransforms.TO_NULLABLE);
 
   /**
@@ -781,8 +779,10 @@ public abstract class ReturnTypes {
         @Override public RelDataType
         inferReturnType(SqlOperatorBinding opBinding) {
           final RelDataTypeFactory typeFactory = opBinding.getTypeFactory();
-          return typeFactory.getTypeSystem()
+          final RelDataType sumType = typeFactory.getTypeSystem()
               .deriveSumType(typeFactory, opBinding.getOperandType(0));
+          // SUM0 should not return null.
+          return typeFactory.createTypeWithNullability(sumType, false);
         }
       };
 
@@ -809,6 +809,36 @@ public abstract class ReturnTypes {
         inferReturnType(SqlOperatorBinding opBinding) {
           final RelDataTypeFactory typeFactory = opBinding.getTypeFactory();
           return typeFactory.getTypeSystem().deriveRankType(typeFactory);
+        }
+      };
+
+  public static final SqlReturnTypeInference AVG_AGG_FUNCTION =
+      new SqlReturnTypeInference() {
+        @Override public RelDataType
+        inferReturnType(SqlOperatorBinding opBinding) {
+          final RelDataTypeFactory typeFactory = opBinding.getTypeFactory();
+          final RelDataType relDataType = typeFactory.getTypeSystem().deriveAvgAggType(
+              typeFactory, opBinding.getOperandType(0));
+          if (opBinding.getGroupCount() == 0 || opBinding.hasFilter()) {
+            return typeFactory.createTypeWithNullability(relDataType, true);
+          } else {
+            return relDataType;
+          }
+        }
+      };
+
+  public static final SqlReturnTypeInference COVAR_FUNCTION =
+      new SqlReturnTypeInference() {
+        @Override public RelDataType
+        inferReturnType(SqlOperatorBinding opBinding) {
+          final RelDataTypeFactory typeFactory = opBinding.getTypeFactory();
+          final RelDataType relDataType = typeFactory.getTypeSystem().deriveCovarType(
+              typeFactory, opBinding.getOperandType(0), opBinding.getOperandType(1));
+          if (opBinding.getGroupCount() == 0 || opBinding.hasFilter()) {
+            return typeFactory.createTypeWithNullability(relDataType, true);
+          } else {
+            return relDataType;
+          }
         }
       };
 }
